@@ -15,7 +15,8 @@ jobs:
       - run: npm run test:e2e
       - run: docker compose config --quiet
       - run: HANDOFF_DOMAIN=handoff.example.org ACME_EMAIL=admin@example.org docker compose -f compose.production.yaml config --quiet
-      - run: docker build -t classroom-handoff:ci .
+      - run: PROXY_NETWORK=proxy docker compose -f compose.yaml -f compose.proxy.yaml config --quiet
+      - run: npm run test:docker
       - uses: actions/upload-artifact@v4
         with:
           name: classroom-handoff-extension

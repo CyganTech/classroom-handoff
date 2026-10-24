@@ -39,30 +39,41 @@ Try pinned tabs and two named, colored groups. Change the source window and send
 
 See [the complete manual acceptance procedure](docs/manual-test.md) for tests A–G and failure/recovery cases.
 
-## Linux Docker deployment with HTTPS
+## Deploy on your server with an existing HTTPS proxy
 
-1. Point a DNS name at the Linux host. Permit inbound TCP 80/443 (UDP 443 is optional for HTTP/3). Ensure both browsers can reach that name and trust its TLS certificate.
-2. Copy `.env.example` to `.env`, set `HANDOFF_DOMAIN` to that DNS name and `ACME_EMAIL` to an operator email.
-3. Start the **standalone** production file:
+Only Git, Docker Engine and Compose v2 are needed on the server:
+
+```sh
+git clone https://github.com/CyganTech/classroom-handoff.git
+cd classroom-handoff
+./handoff setup https://handoff.example.org
+```
+
+Replace the example with your HTTPS origin. Point your existing proxy at `http://127.0.0.1:8787`, enable WebSocket support, and check `https://handoff.example.org/healthz`. For a **containerized proxy**, append `--network YOUR_PROXY_NETWORK` and use `http://classroom-handoff:8787` as its upstream. For a proxy on another server, append `--bind YOUR_DOCKER_HOST_LAN_IP` and use that private IP as the upstream.
+
+```sh
+./handoff update  # Pull changes and rebuild; wait for a healthy backend
+./handoff up      # Rebuild current local files (useful for quick edits)
+./handoff logs    # Follow logs; Ctrl-C exits
+./handoff status
+./handoff stop    # Keeps pairings and device registrations
+```
+
+Setup creates `.env` without overwriting existing configuration. Updates retain the database volume and refuse to overwrite uncommitted Git edits. Backend updates do not need an extension reinstall. See the [short Docker deployment guide](docs/docker-deployment.md) for proxy examples, custom ports, troubleshooting and iteration details.
+
+### Automatic HTTPS with Caddy
+
+If you need the project to provide HTTPS, point a DNS name at the Linux host and permit inbound TCP 80/443 (UDP 443 is optional). Copy `.env.example` to `.env`, set `HANDOFF_DOMAIN` and `ACME_EMAIL`, then start the **standalone** production file:
 
 ```sh
 docker compose --env-file .env -f compose.production.yaml config --quiet
-docker compose --env-file .env -f compose.production.yaml up -d --build
-curl https://YOUR_HANDOFF_DOMAIN/healthz
+docker compose --env-file .env -f compose.production.yaml up -d --build --wait
+curl --fail https://YOUR_HANDOFF_DOMAIN/healthz
 ```
 
-Caddy obtains and renews certificates and proxies WebSockets. The backend port is private to the Docker network; its SQLite database lives in the `handoff-data` volume. The container runs as an unprivileged user with a read-only root filesystem. Configure both extensions with the same `https://...` origin. No path prefix is supported. Public certificate issuance needs working DNS and external reachability; for a private network provide an HTTPS proxy with a certificate trusted by both devices.
+Caddy obtains/renews certificates and proxies WebSockets. Its backend port is private to the Docker network. Do not combine this standalone file with `compose.yaml`. Use its explicit `-f compose.production.yaml` for subsequent Compose operations. Public certificate issuance needs working DNS and external reachability.
 
-The local Compose file binds only the host loopback. Do **not** combine it with the production file; the latter is complete on its own. For an existing TLS proxy route both `/api/*` and `/ws` (WebSocket upgrade) to the backend, retain `/healthz`, and keep the upstream private. `PUBLIC_URL` must be an HTTPS origin outside loopback. The server assumes TLS termination at this trusted proxy; setting `PUBLIC_URL` does not itself enable TLS.
-
-```sh
-# Local logs / stop (preserves registrations)
-docker compose logs --tail=100 backend
-docker compose down
-# Production equivalents include -f compose.production.yaml
-```
-
-Back up the database volume with the backend stopped. Restrict backup access: it contains device records and may contain pending workspace URLs. Restore to one backend instance; this POC is not a multi-replica service. Removing the volume destroys pairings and status history. Never use `down -v` unless that reset is intended.
+All deployments use the `handoff-data` volume for SQLite. The backend runs as an unprivileged user with a read-only root filesystem. Back up the database volume with the backend stopped and restrict backup access; it can contain pending workspace URLs. Restore to one backend instance. Removing the volume destroys pairings and status history. Never use `down -v` unless that reset is intended.
 
 ## Configuration
 
@@ -71,7 +82,10 @@ All times are milliseconds. Values are read at backend startup. See `.env.exampl
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | Node bind address; containers set `0.0.0.0` |
-| `PORT` | `8787` | Node listen port; local Compose maps host `PORT` to 8787 |
+| `PORT` | `8787` | Node listen port; Compose maps host `PORT` to container 8787 |
+| `BIND_ADDRESS` | `127.0.0.1` | Compose host interface; use a private IPv4 for a separate proxy host |
+| `PROXY_NETWORK` | unset | Existing Docker proxy network when using `compose.proxy.yaml` |
+| `COMPOSE_FILE` | unset | Set to `compose.yaml:compose.proxy.yaml` to enable the proxy network |
 | `DATA_DIR` | `.data` | SQLite persistence; container `/data` |
 | `PUBLIC_URL` | `http://localhost:8787` | Validates deployment origin; HTTPS outside loopback |
 | `COMMAND_TTL_MS` | `120000` | Maximum accepted command lifetime |

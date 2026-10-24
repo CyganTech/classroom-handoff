@@ -1,0 +1,121 @@
+#!/bin/sh
+# Server operations need only POSIX sh, Git (for updates), Docker and Compose v2.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
+fail() { echo "Error: $*" >&2; exit 1; }
+usage() {
+    cat <<'HELP'
+Classroom Handoff server
+
+  ./handoff setup https://handoff.example.org [options]
+      --bind IPv4       Host interface (default: 127.0.0.1)
+      --port PORT       Host port (default: 8787)
+      --network NAME    Join an existing Docker proxy network
+  ./handoff up          Build current source and wait for a healthy backend
+  ./handoff update      Fast-forward a clean Git checkout, then rebuild
+  ./handoff status      Show container status
+  ./handoff logs        Follow the last 100 backend log lines (Ctrl-C exits)
+  ./handoff stop        Stop containers; keep device registrations and pairings
+  ./handoff help
+
+HTTPS terminates at your existing reverse proxy. See docs/docker-deployment.md.
+HELP
+}
+compose() { docker compose --project-directory "$ROOT" --env-file "$ROOT/.env" "$@"; }
+preflight() {
+    command -v docker >/dev/null 2>&1 || fail "Install Docker Engine and the Compose v2 plugin first."
+    docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required."
+    docker info >/dev/null 2>&1 || fail "Cannot reach Docker. Start its daemon and check your Docker permissions."
+}
+configured() { [ -f .env ] || fail "No .env found. Run ./handoff setup https://YOUR_HOST first."; }
+start() {
+    compose config --quiet || fail "Compose configuration failed. Check .env."
+    if ! compose up -d --build --wait --wait-timeout 90; then
+        echo "Deployment failed. Configuration and database volumes were kept. Recent backend logs:" >&2
+        compose logs --tail 50 backend >&2 || true
+        echo "Fix the reported problem, then retry ./handoff up." >&2
+        exit 1
+    fi
+    echo "Backend is healthy inside Docker. Verify https://YOUR_HOST/healthz through your reverse proxy."
+}
+valid_port() {
+    printf '%s\n' "$1" | LC_ALL=C grep -Eq '^[1-9][0-9]{0,4}$' && [ "$1" -le 65535 ]
+}
+valid_ipv4() {
+    [ "$(printf '%s' "$1" | wc -l | tr -d ' ')" = 0 ] || return 1
+    printf '%s\n' "$1" | LC_ALL=C awk -F. 'NF != 4 {exit 1} {for(i=1;i<=4;i++) if ($i !~ /^[0-9]+$/ || $i ~ /^0[0-9]/ || length($i)>3 || $i+0>255) exit 1}'
+}
+valid_hostname() {
+    case "$1" in
+        *[!0-9.]*)
+            printf '%s\n' "$1" | LC_ALL=C awk -F. 'length($0)>253 {exit 1} {for(i=1;i<=NF;i++) if (length($i)>63 || $i !~ /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) exit 1}' ;;
+        *) valid_ipv4 "$1" ;;
+    esac
+}
+command=${1:-help}
+[ "$#" -eq 0 ] || shift
+case "$command" in
+    help|--help|-h) [ "$#" -eq 0 ] || fail "Unexpected arguments."; usage; exit 0 ;;
+    setup)
+        [ "$#" -gt 0 ] || fail "Usage: ./handoff setup https://YOUR_HOST [--bind IPv4] [--port PORT] [--network NAME]"
+        origin=$1; shift
+        # Only a DNS/IPv4 HTTPS origin, with optional port; no shell/env metacharacters.
+        printf '%s\n' "$origin" | LC_ALL=C grep -Eq '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[1-9][0-9]{0,4})?$' || fail "Use an HTTPS origin with a DNS name or IPv4 address, without a path, credentials or trailing slash."
+        # grep checks each line, so reject newlines separately before writing dotenv.
+        [ "$(printf '%s' "$origin" | wc -l | tr -d ' ')" = 0 ] || fail "The HTTPS origin must be one line."
+        authority=${origin#https://}
+        case "$authority" in *:*) valid_port "${authority##*:}" || fail "Invalid HTTPS port."; hostname=${authority%:*} ;; *) hostname=$authority ;; esac
+        valid_hostname "$hostname" || fail "Invalid DNS hostname or IPv4 address."
+        bind=127.0.0.1; port=8787; network=
+        while [ "$#" -gt 0 ]; do
+            [ "$#" -ge 2 ] || fail "Missing value for $1."
+            case "$1" in
+                --bind) bind=$2; valid_ipv4 "$bind" || fail "--bind must be an IPv4 address." ;;
+                --port) port=$2; valid_port "$port" || fail "--port must be between 1 and 65535." ;;
+                --network) network=$2
+                    printf '%s\n' "$network" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]*$' || fail "Invalid Docker network name."
+                    [ "$(printf '%s' "$network" | wc -l | tr -d ' ')" = 0 ] || fail "Invalid Docker network name." ;;
+                *) fail "Unknown setup option: $1" ;;
+            esac
+            shift 2
+        done
+        [ ! -e .env ] && [ ! -L .env ] || fail ".env already exists; edit it if needed, then run ./handoff up."
+        preflight
+        # noclobber prevents a concurrent setup from replacing existing configuration.
+        (umask 077; set -C
+            {
+                printf 'PUBLIC_URL=%s\nBIND_ADDRESS=%s\nPORT=%s\n' "$origin" "$bind" "$port"
+                if [ -n "$network" ]; then
+                    printf 'PROXY_NETWORK=%s\nCOMPOSE_FILE=compose.yaml:compose.proxy.yaml\n' "$network"
+                fi
+            } > .env
+        ) || fail "Could not create .env; existing configuration was kept."
+        start
+        echo "Use $origin as BackendUrl in Google Admin. Check: $origin/healthz"
+        if [ -n "$network" ]; then
+            echo "Proxy upstream on Docker network $network: http://classroom-handoff:8787 (WebSockets enabled)."
+        else
+            echo "Proxy upstream: http://$bind:$port (WebSockets enabled)."
+        fi
+        ;;
+    up|update|status|logs|stop)
+        [ "$#" -eq 0 ] || fail "Unexpected arguments for $command."
+        configured; preflight
+        case "$command" in
+            up) start ;;
+            update)
+                command -v git >/dev/null 2>&1 || fail "Git is required for update; use ./handoff up to rebuild local files."
+                git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "Update requires a Git clone."
+                [ -z "$(git status --porcelain)" ] || fail "Uncommitted changes found. Commit/stash them, or use ./handoff up to deploy current local source."
+                git rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1 || fail "No tracked upstream branch. Configure Git tracking before updating."
+                git pull --ff-only || fail "Git update failed. Resolve connectivity or branch divergence; no reset was attempted."
+                # A new revision may change deployment logic; execute that revision.
+                exec /bin/sh "$ROOT/handoff" up ;;
+            status) compose ps ;;
+            logs) compose logs --tail 100 --follow backend ;;
+            stop) compose down ;;
+        esac
+        ;;
+    *) usage >&2; fail "Unknown command: $command" ;;
+esac

@@ -1,0 +1,12 @@
+# Optional addition to compose.yaml for an existing containerized HTTPS proxy.
+services:
+  backend:
+    networks:
+      default:
+      proxy:
+        aliases:
+          - classroom-handoff
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?Set PROXY_NETWORK to your existing proxy network}

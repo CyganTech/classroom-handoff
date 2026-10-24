@@ -3,13 +3,10 @@ FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY tsconfig.json ./
 COPY shared ./shared
 COPY server ./server
-COPY extension ./extension
-COPY tests ./tests
-COPY scripts ./scripts
-RUN npm run build
+COPY scripts/build-server.mjs ./scripts/build-server.mjs
+RUN npm run build:server
 
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8787 DATA_DIR=/data
