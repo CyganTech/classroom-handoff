@@ -8,7 +8,7 @@
 - [x] Implement managed schema/controller/options changes and rebuild version 0.2.0; all existing tests remain green.
 - [x] Add deterministic ZIP helper and signed CRX3 release/verification tooling, stable key/ID, self-host update manifest, admin templates, minimal install page, exact-origin option; test tampering/identity/update consistency.
 - [x] Generate local signed public release and protect private material. Add GitHub Pages/release workflow, Google Admin guide, source/CI updates.
-- [ ] Verify integrated tests/build/browser and public artifact audit; create repository/push only audited files, enable Pages and verify served update XML/CRX hashes. Document managed-device manual checks and any external blocker accurately.
+- [x] Verify integrated tests/build/browser and public artifact audit; create repository/push only audited files, enable Pages and verify served update XML/CRX hashes. Document managed-device manual checks and any external blocker accurately.
 
 ## Progress
 - Inspected current source and researched official Chrome managed schema, Google Admin custom ID/update URL installation and Chromium CRX3 format.
@@ -23,3 +23,7 @@
 - Added verification of the actual committed CRX/ZIP/feed/metadata and archive manifest, in addition to generated-format tests. Public release version is independent from later source development versions; each release's own identity/version/hash must agree.
 
 - Final integrated check: 56/56 automated tests, typecheck/build/runtime smoke/package pass. Managed Chrome smoke rechecked after fixes. Public GitHub repository and Pages workflow configured; initial push/served feed verification remain.
+
+- Published audited initial commit 83b8a14 to public CyganTech/classroom-handoff. Pages run40050618692 succeeded; source/56tests/browser/Docker CI run40050618687 succeeded.
+- Downloaded live release.json, Chrome-style query to updates.xml and CRX over HTTPS. All returned200, metadata/hash/signature/ID matched local release, MIME application/x-chrome-extension. Live page policy generator passed browser interaction checks.
+- Completion boundary: managed installation files and Admin instructions are ready and online. The user supplies their backend HTTPS origin and applies policies in their test OU; actual enrolled-device rollout remains a manual administrative/device validation. No blocker to preparing or publishing remains.
