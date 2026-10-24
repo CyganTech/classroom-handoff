@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "BackendUrl": { "type": "string", "title": "Handoff server origin", "description": "HTTPS origin of the self-hosted backend, with no path. Read-only in device setup. No credentials belong here." },
+    "AutoRegister": { "type": "boolean", "title": "Register this browser automatically", "description": "Defaults to true when BackendUrl is configured. Creates a distinct local device identity. Secure device pairing is still required." },
+    "DeviceName": { "type": "string", "title": "Initial browser name", "description": "Optional initial name for newly registered browsers. Users can rename their browser afterward. Omit for a unique generated name." }
+  }
+}

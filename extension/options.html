@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Device setup · Classroom Handoff</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="options.js"></script>
+  </head>
+  <body class="options-page">
+    <main class="options-shell">
+      <header class="options-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h11v9H4zM9 10h11v9H9" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m12 13 3 3-3 3m-3-3h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>Classroom <strong>Handoff</strong></span></div><span class="eyebrow">DEVICE SETUP</span></header>
+      <div class="page-intro"><h1>A little setup. A smoother day.</h1><p>Connect to your handoff server, then pair the browsers you want to use together.</p></div>
+      <div id="error" class="notice error" role="alert" hidden></div>
+      <div id="managed-notice" class="notice" role="status" hidden></div>
+      <div id="message" class="notice success" role="status" aria-live="polite" hidden></div>
+      <section id="registration" class="card" hidden>
+        <div class="section-heading"><span class="step-number" aria-hidden="true">1</span><div><h2>Connect this browser</h2><p>Use the server address provided by the person running your handoff server.</p></div></div>
+        <form id="register-form">
+          <label for="backend-url">Handoff server address</label><input id="backend-url" type="url" placeholder="https://handoff.example.org" autocomplete="url" required aria-describedby="backend-help"><p id="backend-help" class="field-help">Use HTTPS. For local testing, use http://localhost:8787.</p>
+          <label for="register-name">Name this browser</label><input id="register-name" type="text" maxlength="64" placeholder="Classroom display" autocomplete="off" required><p class="field-help">Choose a name you will recognize on your other devices.</p>
+          <button id="register-submit" class="primary-button fit-button" type="submit">Connect browser <span aria-hidden="true">→</span></button>
+        </form>
+      </section>
+      <div id="configured" hidden>
+        <section class="card">
+          <div class="card-title-row"><h2>This browser</h2><span class="connection-pill"><span id="connection-dot" class="connection-dot" aria-hidden="true"></span><span id="connection-status" role="status">Checking connection…</span></span></div>
+          <form id="rename-form" class="inline-form"><div class="grow"><label for="device-name">Browser name</label><input id="device-name" type="text" maxlength="64" autocomplete="off" required></div><button class="secondary-button" type="submit">Save name</button></form>
+          <dl class="device-details"><div><dt>Server</dt><dd id="backend-display"></dd></div><div><dt>Device ID</dt><dd id="device-id"></dd></div></dl>
+          <p class="field-help">Keep this browser open and your computer awake to receive handoffs automatically.</p>
+        </section>
+        <section class="card pairing-card">
+          <div class="section-heading"><span class="step-number" aria-hidden="true">2</span><div><h2>Pair another browser</h2><p>Both browsers must use the same handoff server. Pair only browsers you trust to send and receive your tab links.</p></div></div>
+          <div class="pairing-columns"><div><h3>On this browser</h3><p>Create a one-time code, then enter it on your other browser.</p><button id="create-code" class="secondary-button" type="button">Create pairing code</button><div id="pairing-result" class="pairing-result" hidden><p class="field-label">PAIRING CODE</p><output id="pairing-code" class="pairing-code" aria-label="Pairing code"></output><p id="pairing-expiry" class="field-help"></p><p class="field-help">Share this code only with the person pairing your browser.</p></div></div><form id="claim-form"><h3>On the other browser</h3><p>Already have a code? Enter it here to connect the two browsers.</p><label for="claim-code">Pairing code</label><input id="claim-code" type="text" maxlength="32" placeholder="Enter pairing code" autocomplete="off" autocapitalize="characters" spellcheck="false" required><button class="secondary-button" type="submit">Pair browser</button></form></div>
+        </section>
+        <section class="card"><div class="card-title-row"><h2>Paired browsers</h2><span id="peer-count" class="count-badge">0</span></div><p class="section-description">Choose a preferred destination in the extension popup.</p><ul id="peers" class="peer-list"></ul><p id="no-peers" class="empty-state">No other browsers paired yet. Create or enter a pairing code above to get started.</p></section>
+        <section class="reset-section"><div><h2>Disconnect this browser</h2><p>Forget this browser’s identity and pairing information. You will need to set it up again.</p></div><button id="reset" class="danger-button" type="button">Disconnect</button></section>
+      </div>
+      <footer class="options-footer">Built for the moment your lesson moves to the big screen.<br><span>Tab links, order, pinned tabs, and supported groups. Each browser keeps its own sign-ins.</span></footer>
+    </main>
+    <dialog id="confirm-dialog" class="confirm-dialog"><form method="dialog"><h2 id="confirm-title">Disconnect this browser?</h2><p id="confirm-text"></p><div class="dialog-actions"><button value="cancel" class="secondary-button">Cancel</button><button id="confirm-action" value="confirm" class="danger-button">Disconnect</button></div></form></dialog>
+  </body>
+</html>

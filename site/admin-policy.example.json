@@ -1,0 +1,8 @@
+{
+  "BackendUrl": {
+    "Value": "https://your-backend-host.invalid"
+  },
+  "AutoRegister": {
+    "Value": true
+  }
+}

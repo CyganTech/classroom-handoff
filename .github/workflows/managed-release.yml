@@ -1,0 +1,52 @@
+name: Build signed managed release
+on:
+  workflow_dispatch:
+    inputs:
+      update_base_url:
+        description: 'Public HTTPS directory containing updates.xml (end with /)'
+        required: true
+        type: string
+      backend_url:
+        description: 'Optional backend HTTPS origin; blank creates the policy-configurable HTTPS build'
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Sign with existing release identity
+        env:
+          SIGNING_KEY: ${{ secrets.EXTENSION_SIGNING_KEY }}
+          UPDATE_BASE_URL: ${{ inputs.update_base_url }}
+          BACKEND_URL: ${{ inputs.backend_url }}
+        run: |
+          set -eu
+          test -n "$SIGNING_KEY" || { echo 'Add the original private key as EXTENSION_SIGNING_KEY; refusing to generate a new identity.'; exit 1; }
+          mkdir -p .signing
+          chmod 700 .signing
+          printf '%s\n' "$SIGNING_KEY" > .signing/release.pem
+          chmod 600 .signing/release.pem
+          if [ -n "$BACKEND_URL" ]; then
+            npm run release:managed -- --key .signing/release.pem --update-base-url "$UPDATE_BASE_URL" --backend-url "$BACKEND_URL"
+          else
+            npm run release:managed -- --key .signing/release.pem --update-base-url "$UPDATE_BASE_URL"
+          fi
+      - name: Verify public signed package
+        run: node --import tsx --test tests/published-release.test.ts
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f .signing/release.pem
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-managed-public-files
+          path: site/
+          include-hidden-files: true

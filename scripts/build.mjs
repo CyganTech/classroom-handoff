@@ -1,0 +1,21 @@
+import { build } from 'esbuild';
+import { cp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+const root = fileURLToPath(new URL('..', import.meta.url));
+process.chdir(root);
+execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', '--noEmit'], { stdio: 'inherit' });
+await rm('dist', { recursive: true, force: true });
+await mkdir('dist/server', { recursive: true });
+await build({ entryPoints: ['server/index.ts'], outfile: 'dist/server/index.js', bundle: true, platform: 'node', target: 'node24', format: 'esm', packages: 'external', sourcemap: true });
+await rm('artifacts/extension', { recursive: true, force: true });
+await mkdir('artifacts/extension', { recursive: true });
+await build({ entryPoints: ['extension/src/background.ts', 'extension/src/popup.ts', 'extension/src/options.ts'], outdir: 'artifacts/extension', bundle: true, platform: 'browser', target: 'chrome120', format: 'esm', sourcemap: true });
+for (const file of ['manifest.json', 'popup.html', 'options.html', 'styles.css', 'staging.html', 'managed-schema.json']) await cp(`extension/${file}`, `artifacts/extension/${file}`);
+try { await cp('extension/icons', 'artifacts/extension/icons', { recursive: true }); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+const manifest = JSON.parse(await readFile('artifacts/extension/manifest.json', 'utf8'));
+const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+if (manifest.version !== pkg.version) throw new Error('Extension and package versions differ');
+await writeFile('artifacts/extension/BUILD.txt', `Classroom Handoff ${pkg.version}\nBuilt from repository with npm ci && npm run build\nNo secrets or deployment-specific settings are embedded.\n`);
+console.log('Built backend: dist/server/index.js');
+console.log('Built unpacked extension: artifacts/extension');

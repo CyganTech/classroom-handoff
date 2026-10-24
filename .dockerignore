@@ -1,0 +1,14 @@
+node_modules
+.npm-cache
+.git
+.env
+.data
+artifacts
+dist
+test-results
+.playwright
+*.log
+.DS_Store
+.signing
+**/*.pem
+site

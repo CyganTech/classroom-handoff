@@ -1,0 +1,35 @@
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${PORT:-8787}:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8787}
+      DATA_DIR: /data
+      COMMAND_TTL_MS: ${COMMAND_TTL_MS:-120000}
+      PAIRING_TTL_MS: ${PAIRING_TTL_MS:-300000}
+      RETENTION_MS: ${RETENTION_MS:-86400000}
+      HEARTBEAT_INTERVAL_MS: ${HEARTBEAT_INTERVAL_MS:-20000}
+      HEARTBEAT_TIMEOUT_MS: ${HEARTBEAT_TIMEOUT_MS:-65000}
+      AUTH_TIMEOUT_MS: ${AUTH_TIMEOUT_MS:-5000}
+      SWEEP_INTERVAL_MS: ${SWEEP_INTERVAL_MS:-1000}
+      RATE_WINDOW_MS: ${RATE_WINDOW_MS:-60000}
+      REGISTRATION_LIMIT: ${REGISTRATION_LIMIT:-20}
+      PAIRING_ATTEMPT_LIMIT: ${PAIRING_ATTEMPT_LIMIT:-10}
+      PAIRING_CREATION_LIMIT: ${PAIRING_CREATION_LIMIT:-10}
+      REQUEST_LIMIT: ${REQUEST_LIMIT:-240}
+      MAX_CONNECTIONS: ${MAX_CONNECTIONS:-1000}
+    volumes:
+      - handoff-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    stop_grace_period: 15s
+volumes:
+  handoff-data:

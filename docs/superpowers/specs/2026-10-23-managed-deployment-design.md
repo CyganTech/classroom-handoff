@@ -1,0 +1,14 @@
+# Managed Google Admin deployment
+
+The user needs to test on managed Chromebooks / managed Chrome through Google Admin, and explicitly requested a public GitHub repository. Developer-mode loading is insufficient. Earlier authorization delegates routine technical decisions and execution; proceed without new routine design approvals.
+
+## Approach
+Self-host a signed MV3 CRX3 and update XML using GitHub Pages. This supports Google Admin's Add Chrome app or extension by ID / From a custom URL. A Chrome Web Store publication would require a developer account/review and is unnecessary for a controlled managed test; a web shortcut/PWA cannot manipulate arbitrary browser tabs. Keep the existing Node/Docker backend; GitHub Pages only hosts static installation/update artifacts.
+
+Generate and retain one private signing key locally (ignored by Git and Docker; never shipped), derive a stable extension ID, and reuse that key for updates. Publish only public signed packages, update XML and admin policy templates. Include release verification of signatures, IDs, ZIP contents, schema and feed. Support exact-origin managed releases when a backend address is provided; if the address is not assigned, produce a policy-configurable HTTPS build whose broader host permission is clearly documented. No device bearer tokens or pairing codes in policy/public artifacts.
+
+## Managed configuration
+Add storage.managed schema for BackendUrl, AutoRegister and optional DeviceName. BackendUrl is admin-controlled, readonly in setup. Auto-register once with a generated recognizable browser name if enabled and host access is already granted. Remain unpaired until the user deliberately completes secure pairing. Report invalid or mismatched policy instead of silently using a different backend. Existing local device registrations survive upgrades; incompatible backend policy stops transport and asks for deliberate reset. React to managed policy changes and reconnect/retry on alarms. Unmanaged developer build retains original user configuration workflow.
+
+## Publishing and verification
+Use CyganTech's connected GitHub account; create public classroom-handoff only if absent. Audit tracked/public files for private keys/env/database/credentials before initial push. GitHub Pages publishes a public-only site directory via a workflow. Add a managed release workflow requiring an explicit signing secret, never create a different signing key automatically in CI. Provide Google Admin OU setup, exact ID/update URL, JSON policy, update/rollback/key-backup instructions, and a clean two-managed-browser test checklist. Verify builds/tests, cryptographic package signatures, real extension browser behavior and served public update/feed. Actual Google Admin rollout requires the user's console and enrolled devices; identify that manual boundary explicitly.

@@ -1,0 +1,10 @@
+{
+  "ExtensionSettings": {
+    "jeclpkblaheplcmfibpagjocmpidmcop": {
+      "installation_mode": "force_installed",
+      "update_url": "https://cygantech.github.io/classroom-handoff/updates.xml",
+      "override_update_url": true,
+      "toolbar_pin": "force_pinned"
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Classroom Handoff",
+  "version": "0.2.0",
+  "description": "Move your current browser workspace to a securely paired browser.",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://[::1]/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Classroom Handoff",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
+  "storage": {
+    "managed_schema": "managed-schema.json"
+  }
+}
