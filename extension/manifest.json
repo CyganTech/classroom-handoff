@@ -8,7 +8,9 @@
     "tabs",
     "tabGroups",
     "storage",
-    "alarms"
+    "alarms",
+    "identity",
+    "identity.email"
   ],
   "optional_host_permissions": [
     "https://*/*",

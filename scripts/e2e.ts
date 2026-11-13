@@ -29,7 +29,7 @@ const browserOptions = {
 async function browser(profile: string) {
   const context = await chromium.launchPersistentContext(join(root, profile), browserOptions);
   contexts.push(context);
-  context.on('page', page => { page.on('pageerror', error => { if (page.url().startsWith('chrome-extension://')) pageErrors.push(error.message); }); });
+  context.on('page', page => { page.on('console', message => { if (page.url().startsWith('chrome-extension://') && message.type() === 'error') pageErrors.push(message.text()); }); page.on('pageerror', error => { if (page.url().startsWith('chrome-extension://')) pageErrors.push(error.message); }); });
   const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker', { timeout: 20000 });
   const extensionId = new URL(worker.url()).host;
   // Chrome's native optional-host bubble is outside page automation. Grant only the
@@ -42,6 +42,9 @@ async function browser(profile: string) {
     await developer.addHostPermission(extensionId, `${origin}/*`);
   }, { extensionId, origin: address.url });
   await settings.close();
+  // Controlled profile identity only; discovery HTTP, SQLite, approval, and handoff
+  // all run through the shipped extension. Never add identity overrides to production.
+  await worker.evaluate("Object.defineProperty(chrome.identity, 'getProfileUserInfo', { configurable: true, value: async () => ({ id: 'e2e-primary-account', email: 'teacher@example.test' }) })");
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   return { context, worker, extensionId, options };
@@ -70,7 +73,7 @@ try {
   const a = await browser('sender'); let b = await browser('receiver');
   await register(a.options, 'Teacher laptop'); await register(b.options, 'Classroom display');
   await a.options.locator('#create-code').click();
-  const code = await until(() => a.options.locator('#pairing-code').innerText(), text => text.length >= 12, 'pairing code');
+  const code = await until(() => a.options.locator('#pairing-code').innerText(), text => /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/.test(text), 'pairing code');
   await b.options.locator('#claim-code').fill(code);
   await b.options.locator('#claim-form button[type=submit]').click();
   const paired = await until(() => state(a.options), value => value.devices.some(d => d.name === 'Classroom display' && d.online), 'paired destination presence');
@@ -78,6 +81,42 @@ try {
   const senderId = paired.deviceId;
   console.log('PASS A: real registration, single-use pairing and online presence');
   await a.options.screenshot({ path: join(evidence, 'setup-paired.png'), fullPage: true });
+  assert.equal((await state(a.options)).discovery?.enabled, false);
+  await a.options.bringToFront();
+  await a.options.locator('#copy-code').click();
+  await until(() => a.options.locator('#message').innerText(), text => text.includes('Code copied'), 'copy feedback');
+  // Copy feedback follows a successful real clipboard write; clipboard reads need
+  // a separate permission that the production extension deliberately does not use.
+  await request(a.options, { action: 'peer.remove', deviceId: destinationId });
+  await a.options.locator('#discovery-enabled').check();
+  await b.options.locator('#discovery-enabled').check();
+  await until(() => a.options.getByRole('button', { name: 'Easy pair with Classroom display' }).isVisible(), Boolean, 'same-profile suggestion');
+  await a.options.getByRole('button', { name: 'Easy pair with Classroom display' }).click();
+  await until(() => state(b.options), value => (value.discovery?.requests.length ?? 0) === 1, 'incoming Easy pair request');
+  assert.equal((await state(a.options)).devices.length, 0, 'request alone does not grant handoff rights');
+  await a.options.screenshot({ path: join(evidence, 'easy-pair-pending.png'), fullPage: true });
+  const approval = await b.context.newPage();
+  await approval.goto(`chrome-extension://${b.extensionId}/popup.html`);
+  await approval.getByRole('button', { name: 'Decline pairing with Teacher laptop' }).click();
+  await until(() => state(a.options), value => value.discovery?.requests.length === 0, 'declined request clears');
+  await until(() => a.options.getByRole('button', { name: 'Easy pair with Classroom display' }).isVisible(), Boolean, 'suggestion after decline');
+  await a.options.getByRole('button', { name: 'Easy pair with Classroom display' }).click();
+  await approval.getByRole('button', { name: 'Accept pairing with Teacher laptop' }).waitFor();
+  await approval.screenshot({ path: join(evidence, 'easy-pair-approval.png') });
+  await approval.getByRole('button', { name: 'Accept pairing with Teacher laptop' }).click();
+  await until(() => state(a.options), value => value.devices.some(d => d.id === destinationId), 'Easy pair approval creates peers');
+  await a.options.setViewportSize({ width: 390, height: 844 });
+  await a.options.screenshot({ path: join(evidence, 'setup-mobile.png'), fullPage: true });
+  assert.equal(await a.options.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'setup fits mobile width');
+  await a.options.setViewportSize({ width: 1200, height: 950 });
+  await approval.getByRole('button', { name: 'Pair another browser', exact: true }).click();
+  const setupShortcut = await until(async () => b.context.pages().find(p => p.url().endsWith('/options.html#pair-browser')), Boolean, 'popup pairing shortcut');
+  assert.ok(setupShortcut); await setupShortcut.close();
+  await approval.close();
+  await a.options.locator('#discovery-enabled').uncheck();
+  await b.options.locator('#discovery-enabled').uncheck();
+  assert.equal((await state(a.options)).devices.length, 1, 'disabling discovery preserves established pairing');
+  console.log('PASS: short-code copy, opt-in suggestions, decline, popup approval, mobile setup, and pairing shortcut');
   const unrelated = await b.context.newPage(); await unrelated.goto(`${lessonOrigin}/unrelated`);
   await b.options.close(); // Receiving needs no open extension UI.
   const urls = Array.from({ length: 5 }, (_, i) => `${lessonOrigin}/lesson-${i + 1}`);

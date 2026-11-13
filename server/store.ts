@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import type { CommandStatus, Credentials, Device, PublicCommand, Workspace } from '../shared/protocol.js';
 
 interface DeviceRow { id: string; name: string; token_hash: string; last_seen: number | null }
@@ -15,9 +15,14 @@ export function publicCommand(row: CommandRow): PublicCommand {
   return { id: row.id, requestId: row.request_id, sourceId: row.source_id, destinationId: row.destination_id, status: row.status,
     createdAt: row.created_at, expiresAt: row.expires_at, completedAt: row.completed_at, error: row.error, warnings: JSON.parse(row.warnings) as string[] };
 }
+export interface PairingRequestRow { id: string; source_id: string; destination_id: string; expires_at: number }
+const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+export function generatePairingCode(): string {
+  return Array.from({ length: 8 }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join('');
+}
 export class Store {
   readonly db: DatabaseSync;
-  constructor(dataDir: string) {
+  constructor(dataDir: string, private readonly pairingCode: () => string = generatePairingCode) {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(dataDir, 'handoff.sqlite'));
     chmodSync(join(dataDir, 'handoff.sqlite'), 0o600);
@@ -25,6 +30,11 @@ export class Store {
       CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, last_seen INTEGER);
       CREATE TABLE IF NOT EXISTS peers (a TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE, b TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE, PRIMARY KEY(a,b), CHECK(a < b));
       CREATE TABLE IF NOT EXISTS pairings (code_hash TEXT PRIMARY KEY, device_id TEXT NOT NULL UNIQUE REFERENCES devices(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS discovery (device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, account_key TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS discovery_account ON discovery(account_key);
+      CREATE TABLE IF NOT EXISTS pairing_requests (id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        destination_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL, CHECK(source_id != destination_id));
+      CREATE UNIQUE INDEX IF NOT EXISTS one_pairing_request ON pairing_requests(min(source_id,destination_id),max(source_id,destination_id));
       CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, request_id TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
         destination_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE, status TEXT NOT NULL CHECK(status IN ('pending','applied','failed','expired')),
         created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, completed_at INTEGER, error TEXT, warnings TEXT NOT NULL DEFAULT '[]',
@@ -52,10 +62,63 @@ export class Store {
   touch(id: string, now: number): void { this.db.prepare('UPDATE devices SET last_seen=? WHERE id=?').run(now, id); }
   revoke(id: string): void { this.db.prepare('DELETE FROM devices WHERE id=?').run(id); this.purgeDisk(); }
   createPairing(id: string, expiresAt: number): string {
-    const raw = randomBytes(9).toString('hex').toUpperCase();
-    this.db.prepare('INSERT INTO pairings(code_hash,device_id,expires_at) VALUES(?,?,?) ON CONFLICT(device_id) DO UPDATE SET code_hash=excluded.code_hash,expires_at=excluded.expires_at').run(digest(raw), id, expiresAt);
-    return raw.match(/.{1,6}/g)!.join('-');
+    // A collision must never steal another browser's active code.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const raw = this.pairingCode();
+      if (this.db.prepare('SELECT 1 FROM pairings WHERE code_hash=?').get(digest(raw))) continue;
+      this.db.prepare('INSERT INTO pairings(code_hash,device_id,expires_at) VALUES(?,?,?) ON CONFLICT(device_id) DO UPDATE SET code_hash=excluded.code_hash,expires_at=excluded.expires_at').run(digest(raw), id, expiresAt);
+      return raw.slice(0, 4) + '-' + raw.slice(4);
+    }
+    throw new Error('Could not generate a unique pairing code');
   }
+  discoveryKey(id: string): string | undefined {
+    return (this.db.prepare('SELECT account_key FROM discovery WHERE device_id=?').get(id) as { account_key: string } | undefined)?.account_key;
+  }
+  setDiscovery(id: string, key: string | null): void {
+    if ((this.discoveryKey(id) ?? null) === key) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM pairing_requests WHERE source_id=? OR destination_id=?').run(id, id);
+      this.db.prepare('DELETE FROM discovery WHERE device_id=?').run(id);
+      if (key) this.db.prepare('INSERT INTO discovery VALUES(?,?)').run(id, key);
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  matches(first: string, second: string): boolean {
+    const key = this.discoveryKey(first);
+    return first !== second && !!key && key === this.discoveryKey(second) && !this.arePeers(first, second);
+  }
+  suggestions(id: string): DeviceRow[] {
+    return this.db.prepare(`SELECT d.* FROM devices d JOIN discovery m ON m.device_id=d.id
+      WHERE m.account_key=(SELECT account_key FROM discovery WHERE device_id=?) AND d.id!=? ORDER BY d.name,d.id`).all(id, id) as unknown as DeviceRow[];
+  }
+  pairingRequests(id: string, now: number): PairingRequestRow[] {
+    return this.db.prepare('SELECT * FROM pairing_requests WHERE (source_id=? OR destination_id=?) AND expires_at>? ORDER BY expires_at,id').all(id, id, now) as unknown as PairingRequestRow[];
+  }
+  getPairingRequest(id: string): PairingRequestRow | undefined {
+    return this.db.prepare('SELECT * FROM pairing_requests WHERE id=?').get(id) as unknown as PairingRequestRow | undefined;
+  }
+  requestPairing(source: string, destination: string, expiresAt: number, now: number): PairingRequestRow {
+    const existing = this.pairingRequests(source, now).find(r => r.source_id === destination || r.destination_id === destination);
+    if (existing) return existing;
+    const row = { id: randomUUID(), source_id: source, destination_id: destination, expires_at: expiresAt };
+    this.db.prepare('INSERT INTO pairing_requests VALUES(?,?,?,?)').run(row.id, source, destination, expiresAt);
+    return row;
+  }
+  resolvePairing(id: string, receiver: string, accept: boolean, now: number): PairingRequestRow | undefined {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.getPairingRequest(id);
+      if (!row || row.destination_id !== receiver || row.expires_at <= now || !this.matches(row.source_id, receiver)) { this.db.exec('ROLLBACK'); return undefined; }
+      this.db.prepare('DELETE FROM pairing_requests WHERE id=?').run(id);
+      if (accept) {
+        const [a, b] = [row.source_id, receiver].sort();
+        this.db.prepare('INSERT OR IGNORE INTO peers(a,b) VALUES(?,?)').run(a!, b!);
+      }
+      this.db.exec('COMMIT'); return row;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
   claimPairing(code: string, claimingId: string, now: number): string | undefined {
     const row = this.db.prepare('SELECT device_id,expires_at FROM pairings WHERE code_hash=?').get(digest(code)) as { device_id: string; expires_at: number } | undefined;
     if (!row || row.expires_at <= now || row.device_id === claimingId) return undefined;
@@ -64,6 +127,7 @@ export class Store {
     try {
       this.db.prepare('DELETE FROM pairings WHERE code_hash=?').run(digest(code));
       this.db.prepare('INSERT OR IGNORE INTO peers(a,b) VALUES(?,?)').run(a!, b!);
+      this.db.prepare('DELETE FROM pairing_requests WHERE (source_id=? AND destination_id=?) OR (source_id=? AND destination_id=?)').run(a!, b!, b!, a!);
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
     return row.device_id;
@@ -91,6 +155,7 @@ export class Store {
     const expired = this.db.prepare("SELECT * FROM commands WHERE status='pending' AND expires_at<=?").all(now) as unknown as CommandRow[];
     this.db.prepare("UPDATE commands SET status='expired',completed_at=?,error='Handoff expired before acknowledgement',payload=NULL WHERE status='pending' AND expires_at<=?").run(now, now);
     this.db.prepare('DELETE FROM pairings WHERE expires_at<=?').run(now);
+    this.db.prepare('DELETE FROM pairing_requests WHERE expires_at<=?').run(now);
     const deleted = this.db.prepare("DELETE FROM commands WHERE status!='pending' AND completed_at<?").run(now - retentionMs);
     if (expired.length || deleted.changes) this.purgeDisk();
     return expired.map(row => this.getCommand(row.id)!).filter(Boolean);

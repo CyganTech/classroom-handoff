@@ -21,6 +21,7 @@
         <button id="start-setup" class="primary-button" type="button">Set up this browser <span aria-hidden="true">↗</span></button>
       </section>
       <section id="handoff-panel" hidden>
+        <ul id="pairing-requests" class="pairing-request-list" aria-label="Pairing requests" hidden></ul>
         <div class="intro"><h1>Pick up where you left off.</h1><p>Send the tabs in this window to a paired browser.</p></div>
         <label for="destination">Send to</label>
         <select id="destination" aria-describedby="destination-help"><option value="">Choose a device</option></select>
@@ -29,6 +30,7 @@
         <div id="command-status" class="notice" role="status" aria-live="polite" hidden></div>
         <div id="received-status" class="received-status" hidden></div>
         <ul id="capture-warnings" class="warnings" aria-label="Workspace limitations" hidden></ul>
+        <button id="pair-browser" class="secondary-button pair-browser-button" type="button">Pair another browser</button>
         <p class="privacy-note">Only tab links and organization are sent. Your sign-ins stay on each browser.</p>
       </section>
       <div id="error" class="notice error" role="alert" hidden></div>

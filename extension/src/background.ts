@@ -3,6 +3,7 @@ import { deviceNameSchema, normalizeBackendUrl, publicCommandSchema, type Creden
 import type { UiRequest, UiResponse, UiState } from '../../shared/ui.js';
 import { ApiError, BackendClient, RealtimeTransport, type ConnectionSettings } from './transport.js';
 import { captureWorkspace, errorText, WorkspaceReceiver } from './workspace.js';
+import { ProfileDiscovery, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED } from './discovery.js';
 import { isManagedRelease, parseManagedPolicy, type ManagedPolicy } from './managed.js';
 interface Configuration extends ConnectionSettings { name: string }
 type Status = Omit<UiState, 'configured' | 'backendUrl' | 'deviceId' | 'name' | 'lastReceived'>;
@@ -16,6 +17,7 @@ export function isTrustedSender(sender: Pick<chrome.runtime.MessageSender, 'id' 
 }
 
 export class BackgroundController {
+  private readonly discovery: ProfileDiscovery;
   private readonly receiver: WorkspaceReceiver;
   private readonly transport: RealtimeTransport;
   private statusQueue: Promise<unknown> = Promise.resolve();
@@ -26,6 +28,7 @@ export class BackgroundController {
   private nextRegistrationAttempt = 0;
   private sending?: Promise<PublicCommand | undefined>;
   constructor(private readonly api: typeof chrome) {
+    this.discovery = new ProfileDiscovery(api);
     this.receiver = new WorkspaceReceiver(api);
     this.transport = new RealtimeTransport({
       settings: () => this.configuration(),
@@ -90,12 +93,12 @@ export class BackgroundController {
     return this.enqueueOperation(async () => {
       await Promise.all([this.api.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }), this.api.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })]);
       await this.api.alarms.create(ALARM, { periodInMinutes: 0.5 });
-      await this.applyManagedPolicy(); await this.receiver.recover(); await this.transport.ensureConnected();
+      await this.applyManagedPolicy(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected();
     });
   }
   recover(): Promise<void> {
     return this.enqueueOperation(async () => {
-      try { await this.applyManagedPolicy(); await this.receiver.recover(); await this.transport.ensureConnected(); await this.retryOutbound(); await this.refreshCommand(); }
+      try { await this.applyManagedPolicy(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected(); await this.retryOutbound(); await this.refreshCommand(); }
       catch (error) { await this.updateStatus({ lastError: errorText(error) }); }
     });
   }
@@ -144,7 +147,8 @@ export class BackgroundController {
     if (refresh && config) { await this.transport.ensureConnected(); await this.refreshDevices(); await this.refreshCommand(); }
     const values = await this.api.storage.local.get([STATUS, 'lastReceived']);
     const status = values[STATUS] as Status | undefined;
-    return { ...status, managed: isManagedRelease || !!this.policy.backendUrl || !!this.policyError, managedBackendUrl: this.policy.backendUrl, configured: !!config, ...(config ? { backendUrl: config.backendUrl, deviceId: config.credentials.deviceId, name: config.name } : {}), connected: this.transport.isConnected, devices: status?.devices ?? [], ...(values.lastReceived ? { lastReceived: values.lastReceived as UiState['lastReceived'] } : {}) };
+    const discovery = await this.discovery.sync(await this.configuration());
+    return { ...status, discovery, managed: isManagedRelease || !!this.policy.backendUrl || !!this.policyError, managedBackendUrl: this.policy.backendUrl, configured: !!config, ...(config ? { backendUrl: config.backendUrl, deviceId: config.credentials.deviceId, name: config.name } : {}), connected: this.transport.isConnected, devices: status?.devices ?? [], ...(values.lastReceived ? { lastReceived: values.lastReceived as UiState['lastReceived'] } : {}) };
   }
   private retryOutbound(): Promise<PublicCommand | undefined> {
     if (this.sending) return this.sending;
@@ -192,6 +196,26 @@ export class BackgroundController {
         const name = deviceNameSchema.parse(request.name); const config = await this.configuration(); if (!config) throw new Error('Set up this browser first');
         await (await this.client()).request('/api/device', 'PATCH', { name }); await this.api.storage.local.set({ [CONFIG]: { ...config, name } }); return { ok: true, state: await this.state() };
       }
+      case 'discovery.enable': {
+        z.boolean().parse(request.enabled);
+        await this.discovery.setEnabled(request.enabled);
+        return { ok: true, state: await this.state() };
+      }
+      case 'pairing.request':
+      case 'pairing.accept':
+      case 'pairing.decline': {
+        const discovery = await this.discovery.sync(await this.configuration());
+        if (discovery.error || !discovery.enabled || !discovery.available) throw new Error(discovery.error ?? 'Enable suggestions with a signed-in Chrome profile, or use a pairing code.');
+        const client = await this.client();
+        if (request.action === 'pairing.request') {
+          const destinationId = z.string().uuid().parse(request.destinationId);
+          await client.request('/api/pairing-requests', 'POST', { destinationId });
+        } else {
+          const id = z.string().uuid().parse(request.requestId);
+          await client.request(`/api/pairing-requests/${id}/${request.action === 'pairing.accept' ? 'accept' : 'decline'}`, 'POST');
+        }
+        return { ok: true, state: await this.state() };
+      }
       case 'pairing.create': return { ok: true, pairing: await (await this.client()).request('/api/pairings', 'POST', {}) };
       case 'pairing.claim': {
         const code = z.string().trim().min(1).max(100).parse(request.code); await (await this.client()).request('/api/pairings/claim', 'POST', { code }); return { ok: true, state: await this.state() };
@@ -220,7 +244,7 @@ export class BackgroundController {
           try { await new BackendClient(existing.backendUrl, existing.credentials).request('/api/device', 'DELETE'); }
           catch (error) { if (!(error instanceof ApiError) || error.status !== 401) throw error; }
         }
-        this.transport.stop(); await this.api.storage.local.remove([CONFIG, STATUS, OUTBOUND]); return { ok: true, state: await this.state(false) };
+        this.transport.stop(); await this.api.storage.local.remove([CONFIG, STATUS, OUTBOUND, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED]); return { ok: true, state: await this.state(false) };
       }
       default: throw new Error('Unknown extension request');
     }
@@ -233,6 +257,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
     if (!isTrustedSender(sender, chrome.runtime.id, chrome.runtime.getURL(''))) { sendResponse({ ok: false, error: 'Untrusted extension request' }); return false; }
     void controller.request(request).then(sendResponse); return true;
   });
+  chrome.identity?.onSignInChanged?.addListener(() => { void controller.recover(); });
   chrome.storage.onChanged.addListener((_changes, area) => { if (area === 'managed') void controller.recover(); });
   chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === ALARM) void controller.recover(); });
   chrome.runtime.onInstalled.addListener(() => { void controller.start().catch(() => undefined); });

@@ -1,6 +1,8 @@
 import type { UiState } from '../../shared/ui.js';
 import { element, errorMessage, renderConnection, requestUi, showText, startStatePolling } from './ui-client.js';
 
+import { renderPairingRequests } from './pairing-ui.js';
+
 const destination = element<HTMLSelectElement>('destination');
 const handoff = element<HTMLButtonElement>('handoff');
 const errorBox = element('error');
@@ -12,6 +14,9 @@ let pollError: string | undefined;
 function render(next: UiState): void {
   state = next;
   renderConnection(next);
+  renderPairingRequests(element('pairing-requests'), next.discovery?.requests ?? [], next.deviceId, busy, action => {
+    void runAction(async () => { const result = await requestUi(action); if (result.state) state = result.state; });
+  });
   element('welcome').hidden = next.configured;
   element('handoff-panel').hidden = !next.configured;
   element('device-name').textContent = next.name ?? 'Classroom Handoff';
@@ -30,7 +35,7 @@ function render(next: UiState): void {
   destination.value = preferred;
   destination.disabled = busy || next.devices.length === 0;
   const selected = next.devices.find(d => d.id === preferred);
-  element('destination-help').textContent = !next.devices.length ? 'Open Device setup to pair another browser.' : selected && !selected.online ? 'This browser is offline. Reconnect it, then send again.' : 'The receiving browser opens your workspace automatically.';
+  element('destination-help').textContent = !next.devices.length ? 'Choose Pair another browser to get started.' : selected && !selected.online ? 'This browser is offline. Reconnect it, then send again.' : 'The receiving browser opens your workspace automatically.';
   handoff.disabled = busy || !next.connected || !selected?.online || next.lastCommand?.status === 'pending';
   handoff.querySelector('span')!.textContent = busy ? 'Sending…' : 'Handoff';
   const commandBox = element('command-status');
@@ -60,6 +65,9 @@ async function runAction(action: () => Promise<void>): Promise<void> {
 
 const openSetup = () => { void chrome.runtime.openOptionsPage().catch(error => showText(errorBox, errorMessage(error))); };
 for (const id of ['open-settings', 'start-setup', 'manage-devices']) element(id).addEventListener('click', openSetup);
+element('pair-browser').addEventListener('click', () => {
+  void chrome.tabs.create({ url: chrome.runtime.getURL('options.html#pair-browser') }).catch(error => showText(errorBox, errorMessage(error)));
+});
 destination.addEventListener('change', () => {
   const deviceId = destination.value;
   if (!deviceId) { if (state) render(state); return; }

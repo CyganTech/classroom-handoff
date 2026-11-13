@@ -2,14 +2,16 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { z } from 'zod';
-import { ackSchema, deviceNameSchema, handoffSchema, MAX_MESSAGE_BYTES, type ServerMessage } from '../shared/protocol.js';
+import { ackSchema, deviceNameSchema, handoffSchema, MAX_MESSAGE_BYTES, type PairingRequest, type ServerMessage } from '../shared/protocol.js';
 import { readConfig, type AppConfig } from './config.js';
-import { Store, digest, publicCommand, type CommandRow } from './store.js';
+import { Store, digest, publicCommand, type PairingRequestRow, type CommandRow } from './store.js';
 
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 const registrationSchema = z.object({ name: deviceNameSchema }).strict();
 const authenticationSchema = z.object({ type: z.literal('authenticate'), deviceId: z.string().uuid(), token: z.string().min(40).max(100) }).strict();
 const pairingClaimSchema = z.object({ code: z.string().min(1).max(64) }).strict();
+const discoverySchema = z.object({ accountKey: z.string().regex(/^[a-f0-9]{64}$/).nullable() }).strict();
+const pairingRequestSchema = z.object({ destinationId: z.string().uuid() }).strict();
 const pingSchema = z.object({ type: z.literal('ping') }).strict();
 interface Connection { socket: WebSocket; lastSeen: number; lastPing: number }
 
@@ -36,6 +38,10 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
   function online(id: string): boolean {
     const connection = connections.get(id);
     return !!connection && connection.socket.readyState === WebSocket.OPEN && config.now() - connection.lastSeen <= config.heartbeatTimeoutMs;
+  }
+  function publicPairingRequest(row: PairingRequestRow): PairingRequest {
+    return { id: row.id, source: store.device(store.getDevice(row.source_id)!, online(row.source_id)),
+      destination: store.device(store.getDevice(row.destination_id)!, online(row.destination_id)), expiresAt: row.expires_at };
   }
   function notifyDevices(id: string): void {
     send(connections.get(id)?.socket, { type: 'devices_changed' });
@@ -96,6 +102,34 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       if (!caller) throw new HttpError(401, 'Valid device credentials are required');
       rate(`api:${caller.id}`, config.requestLimit);
       sweep();
+      if (path === '/api/discovery' && method === 'PUT') {
+        const { accountKey } = discoverySchema.parse(await body(req));
+        store.setDiscovery(caller.id, accountKey); json(res, 200, {}); return;
+      }
+      if (path === '/api/discovery' && method === 'GET') {
+        const suggestions = store.suggestions(caller.id).filter(row => online(row.id) && !store.arePeers(caller.id, row.id)).map(row => store.device(row, true));
+        json(res, 200, { suggestions, requests: store.pairingRequests(caller.id, config.now()).map(publicPairingRequest) }); return;
+      }
+      if (path === '/api/pairing-requests' && method === 'GET') {
+        json(res, 200, { requests: store.pairingRequests(caller.id, config.now()).map(publicPairingRequest) }); return;
+      }
+      if (path === '/api/pairing-requests' && method === 'POST') {
+        rate(`pair-create:${caller.id}`, config.pairingCreationLimit);
+        const { destinationId } = pairingRequestSchema.parse(await body(req));
+        if (!store.matches(caller.id, destinationId) || !online(destinationId)) throw new HttpError(409, 'This browser is no longer available for Easy pair. Refresh suggestions or use a code.');
+        const now = config.now();
+        const request = store.requestPairing(caller.id, destinationId, now + config.pairingTtlMs, now);
+        json(res, 201, { request: publicPairingRequest(request) }); return;
+      }
+      const pairingRequestMatch = /^\/api\/pairing-requests\/([a-f0-9-]{36})\/(accept|decline)$/.exec(path);
+      if (pairingRequestMatch && method === 'POST') {
+        rate(`pair-claim:${caller.id}`, config.pairingAttemptLimit); rate(`pair-claim-ip:${ip}`, config.pairingAttemptLimit * 4);
+        const accepted = pairingRequestMatch[2] === 'accept';
+        const request = store.resolvePairing(pairingRequestMatch[1]!, caller.id, accepted, config.now());
+        if (!request) throw new HttpError(404, 'Pairing request is unavailable or expired.');
+        if (accepted) { notifyDevices(request.source_id); notifyDevices(request.destination_id); }
+        json(res, 200, {}); return;
+      }
       if (path === '/api/devices' && method === 'GET') {
         json(res, 200, { devices: store.peerRows(caller.id).map(row => store.device(row, online(row.id))) }); return;
       }
@@ -122,7 +156,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
         rate(`pair-claim:${caller.id}`, config.pairingAttemptLimit); rate(`pair-claim-ip:${ip}`, config.pairingAttemptLimit * 4);
         const claim = pairingClaimSchema.parse(await body(req));
         const normalized = claim.code.toUpperCase().replace(/[\s-]/g, '');
-        if (!/^[A-F0-9]{18}$/.test(normalized)) throw new HttpError(400, 'Pairing code is invalid, expired, or already used');
+        if (!/^(?:[2-9A-HJ-NP-Z]{8}|[A-F0-9]{18})$/.test(normalized)) throw new HttpError(400, 'Pairing code is invalid, expired, or already used');
         const peerId = store.claimPairing(normalized, caller.id, config.now());
         if (!peerId) throw new HttpError(400, 'Pairing code is invalid, expired, or already used');
         notifyDevices(caller.id); notifyDevices(peerId);

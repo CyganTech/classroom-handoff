@@ -79,7 +79,7 @@ test('registers credential hashes, authenticates API and exposes only paired dev
 test('pairing codes are single-use, expire, and cannot pair a device with itself', async t => {
   let now = 1000; const f = await fixture(t, { now: () => now, pairingTtlMs: 100 });
   const a = await f.register('A'); const b = await f.register('B'); const c = await f.register('C');
-  const code = await f.pair(a, b); assert.ok(code.replaceAll('-', '').length >= 15);
+  const code = await f.pair(a, b); assert.match(code, /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/);
   assert.equal((await f.api('/api/pairings/claim', c, 'POST', { code })).status, 400);
   const own = (await f.api('/api/pairings', a, 'POST')).body;
   assert.equal((await f.api('/api/pairings/claim', a, 'POST', { code: own.code })).status, 400);
@@ -218,4 +218,112 @@ test('rejects a workspace whose delivered envelope would exceed the receiver mes
   assert.equal(Buffer.byteLength(JSON.stringify(request)), 512 * 1024 - 1);
   const result = await f.api('/api/handoffs', a, 'POST', request);
   assert.equal(result.status, 413);
+});
+
+
+test('short codes normalize whitespace and case, and legacy codes remain claimable', async t => {
+  const f = await fixture(t); const a = await f.register('A'); const b = await f.register('B');
+  const code = (await f.api('/api/pairings', a, 'POST')).body.code;
+  assert.match(code, /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/);
+  assert.equal((await f.api('/api/pairings/claim', b, 'POST', { code: '  ' + code.toLowerCase().replace('-', ' - ') + '  ' })).status, 200);
+  const { digest } = await import('../server/store.js');
+  f.app.store.db.prepare('INSERT INTO pairings VALUES(?,?,?)').run(digest('ABCDEF123456789012'), a.deviceId, Date.now() + 300000);
+  assert.equal((await f.api('/api/pairings/claim', b, 'POST', { code: 'ABCDEF-123456-789012' })).status, 200);
+});
+
+test('discovery is opt-in and exposes only matching online unpaired browsers without account keys', async t => {
+  const f = await fixture(t); const a = await f.register('A'); const b = await f.register('B'); const c = await f.register('C');
+  await f.connect(a); await f.connect(b); await f.connect(c);
+  const key = 'a'.repeat(64);
+  assert.equal((await f.api('/api/discovery', undefined)).status, 401);
+  assert.deepEqual((await f.api('/api/discovery', a)).body.suggestions, []);
+  assert.equal((await f.api('/api/discovery', a, 'PUT', { accountKey: key })).status, 200);
+  assert.deepEqual((await f.api('/api/discovery', a)).body.suggestions, []);
+  await f.api('/api/discovery', b, 'PUT', { accountKey: key });
+  await f.api('/api/discovery', c, 'PUT', { accountKey: 'c'.repeat(64) });
+  const discovery = await f.api('/api/discovery', a);
+  assert.deepEqual(discovery.body.suggestions.map((d: any) => d.id), [b.deviceId]);
+  assert.equal(JSON.stringify(discovery.body).includes(key), false);
+  assert.equal((await f.api('/api/discovery', a, 'PUT', { accountKey: 'email@example.org' })).status, 400);
+  await f.pair(a, b);
+  assert.deepEqual((await f.api('/api/discovery', a)).body.suggestions, []);
+});
+
+test('Easy pair requires receiver approval, deduplicates requests, and consumes acceptance atomically', async t => {
+  const f = await fixture(t); const a = await f.register('A'); const b = await f.register('B'); const c = await f.register('C');
+  await f.connect(a); await f.connect(b); await f.connect(c);
+  for (const device of [a, b, c]) await f.api('/api/discovery', device, 'PUT', { accountKey: 'a'.repeat(64) });
+  const create = () => f.api('/api/pairing-requests', a, 'POST', { destinationId: b.deviceId });
+  const created = await create(); assert.equal(created.status, 201);
+  const id = created.body.request.id;
+  assert.equal((await create()).body.request.id, id);
+  assert.equal((await f.api('/api/pairing-requests', b, 'POST', { destinationId: a.deviceId })).body.request.id, id);
+  assert.equal((await f.api('/api/pairing-requests', b)).body.requests[0].source.name, 'A');
+  assert.deepEqual((await f.api('/api/devices', a)).body.devices, []);
+  assert.equal((await f.api('/api/handoffs', a, 'POST', { destinationId: b.deviceId, requestId: randomUUID(), workspace })).status, 403);
+  for (const unauthorized of [a, c]) assert.equal((await f.api(`/api/pairing-requests/${id}/accept`, unauthorized, 'POST')).status, 404);
+  const results = await Promise.all([0, 1].map(() => f.api(`/api/pairing-requests/${id}/accept`, b, 'POST')));
+  assert.deepEqual(results.map(r => r.status).sort(), [200, 404]);
+  assert.equal((await f.api('/api/devices', a)).body.devices[0].id, b.deviceId);
+  assert.deepEqual((await f.api('/api/pairing-requests', b)).body.requests, []);
+});
+
+test('Easy pair handles decline, expiry, changed accounts, disabling, offline targets and revocation', async t => {
+  let now = 1000; const f = await fixture(t, { now: () => now, pairingTtlMs: 100, pairingCreationLimit: 30 });
+  const a = await f.register('A'); const b = await f.register('B'); const c = await f.register('C');
+  await f.connect(a); const sb = await f.connect(b);
+  const key = 'a'.repeat(64);
+  const enable = async (device: Credentials, accountKey: string | null = key) => f.api('/api/discovery', device, 'PUT', { accountKey });
+  await enable(a); await enable(b); await enable(c);
+  const create = async () => { const r = await f.api('/api/pairing-requests', a, 'POST', { destinationId: b.deviceId }); assert.equal(r.status, 201); return r.body.request.id; };
+  const accept = (id: string) => f.api(`/api/pairing-requests/${id}/accept`, b, 'POST');
+  assert.equal((await f.api('/api/pairing-requests', a, 'POST', { destinationId: a.deviceId })).status, 409);
+  assert.equal((await f.api('/api/pairing-requests', a, 'POST', { destinationId: c.deviceId })).status, 409);
+  let id = await create();
+  assert.equal((await f.api(`/api/pairing-requests/${id}/decline`, b, 'POST')).status, 200); assert.equal((await accept(id)).status, 404);
+  id = await create(); now += 101; assert.equal((await accept(id)).status, 404);
+  id = await create(); await enable(b, 'b'.repeat(64)); assert.equal((await accept(id)).status, 404);
+  assert.deepEqual((await f.api('/api/discovery', a)).body.suggestions, []);
+  await enable(b); id = await create(); await enable(b, null); assert.equal((await accept(id)).status, 404);
+  await enable(b); id = await create(); await f.api('/api/device', a, 'DELETE'); assert.equal((await accept(id)).status, 404);
+  sb.socket.close(); await once(sb.socket, 'close');
+  assert.deepEqual((await f.api('/api/discovery', c)).body.suggestions, []);
+});
+
+test('Easy pair shares the manual pairing creation and attempt rate limits', async t => {
+  const f = await fixture(t, { pairingCreationLimit: 1, pairingAttemptLimit: 1 });
+  const a = await f.register('A'); const b = await f.register('B'); await f.connect(a); await f.connect(b);
+  for (const device of [a, b]) await f.api('/api/discovery', device, 'PUT', { accountKey: 'a'.repeat(64) });
+  const request = await f.api('/api/pairing-requests', a, 'POST', { destinationId: b.deviceId }); assert.equal(request.status, 201);
+  assert.equal((await f.api('/api/pairings', a, 'POST')).status, 429);
+  assert.equal((await f.api('/api/pairings/claim', b, 'POST', { code: 'BAD' })).status, 400);
+  assert.equal((await f.api(`/api/pairing-requests/${request.body.request.id}/accept`, b, 'POST')).status, 429);
+});
+
+test('short-code collision retries preserve other browsers codes', async t => {
+  const { Store } = await import('../server/store.js');
+  const dir = await mkdtemp(join(tmpdir(), 'pairing-collision-'));
+  const candidates = ['23456789', '23456789', 'ABCDEFGH', 'JKLMNPQR'];
+  const store = new Store(dir, () => candidates.shift()!);
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
+  const a = store.register('A'); const b = store.register('B'); const c = store.register('C');
+  assert.equal(store.createPairing(a.deviceId, 100), '2345-6789');
+  assert.equal(store.createPairing(b.deviceId, 100), 'ABCD-EFGH');
+  assert.equal(store.claimPairing('23456789', c.deviceId, 1), a.deviceId);
+  assert.equal(store.claimPairing('ABCDEFGH', c.deviceId, 1), b.deviceId);
+  const old = store.createPairing(a.deviceId, 100);
+  assert.equal(old, 'JKLM-NPQR');
+});
+
+test('discovery and pending requests survive restart while disabling discovery preserves existing peers', async t => {
+  const f = await fixture(t); const a = await f.register('A'); const b = await f.register('B');
+  const key = 'a'.repeat(64); f.app.store.setDiscovery(a.deviceId, key); f.app.store.setDiscovery(b.deviceId, key);
+  const request = f.app.store.requestPairing(a.deviceId, b.deviceId, Date.now() + 300000, Date.now());
+  await f.app.close();
+  const restarted = createApp({ dataDir: f.dataDir }); t.after(() => restarted.close());
+  assert.equal(restarted.store.discoveryKey(a.deviceId), key);
+  assert.equal(restarted.store.pairingRequests(b.deviceId, Date.now())[0]?.id, request.id);
+  assert.ok(restarted.store.resolvePairing(request.id, b.deviceId, true, Date.now()));
+  restarted.store.setDiscovery(a.deviceId, null); restarted.store.setDiscovery(b.deviceId, null);
+  assert.equal(restarted.store.arePeers(a.deviceId, b.deviceId), true);
 });

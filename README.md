@@ -26,10 +26,20 @@ For development without Docker, use `npm run dev` instead. Defaults are `127.0.0
 
 1. On each Chrome profile, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted ZIP directory containing `manifest.json` (or `artifacts/extension`). Pin Classroom Handoff to the toolbar.
 2. Open the extension → **Device setup**. Enter `http://localhost:8787` for the local example and a recognizable name, such as “Teacher laptop” or “Room display”. Click **Connect browser** and allow access to the chosen server when Chrome prompts.
-3. On the first browser create a pairing code. On the other browser enter it and pair. Codes are single use and expire after five minutes. Share them only with the intended receiver; pairing grants automatic incoming handoffs in both directions.
+3. Choose **Pair another browser** in the popup. Under **Use a code**, create an eight-character code such as `K7MP-4RTX`, copy it, and enter it on the other browser. Codes are single use and expire after five minutes. Existing older codes remain valid until expiry. Share codes only with the intended receiver; pairing grants automatic incoming handoffs in both directions.
 4. Confirm both browsers show the other as **Online**. Choose a destination in the popup once; it is remembered.
 
 For two physical devices use a reachable **HTTPS** backend URL. `localhost` on each device refers to that device, so it cannot connect two computers. Do not expose the development HTTP port on the LAN. Pairing is independent of the extension ID, so separately loaded installations work.
+
+## Optional suggested browsers and Easy pair
+
+In Device setup, turn on **Suggest my other browsers** on both installations. They must use the same Handoff server and the same primary signed-in Chrome profile account; a Google account signed into a website alone does not qualify. ChromeOS primary-profile support must be validated on actual enrolled devices. Discovery starts off and never asks you to sign in to the extension or grant Google OAuth access.
+
+An online, unpaired installation appears under **Suggested browsers**. Click **Easy pair**, then open Handoff on the other browser and choose **Accept** or **Decline**. Requests expire after five minutes; sending a request alone grants no access. Once accepted, pairing behaves exactly like code pairing. If no account is available, permissions are denied, or suggestions cannot reach the server, use a code.
+
+The extension needs Chrome's `identity` and `identity.email` permissions to read primary-profile information when suggestions are enabled. It sends a SHA-256 matching key derived from the stable account ID and backend origin. The email stays local and is never included in discovery requests. The key is persistent, pseudonymous account metadata visible to the server operator; it is a discovery hint, not verified Google authentication. Approve only a browser you recognize. Turning suggestions off, changing the profile account, or disconnecting clears membership and pending requests when the extension next reaches the server. Existing peer links remain until removed explicitly. Identity is rechecked at startup, sign-in changes, recovery alarms and UI polling; sleeping/offline browsers cannot publish a change immediately.
+
+Deploy the updated backend **before** distributing this extension. Additive SQLite tables preserve registrations and peers; old extensions continue using their existing handoff protocol. The checked-in signed release/site is a separate distribution: pushing this source branch does not publish a new managed CRX or deploy a backend. An eventual managed release must use a newer version and the existing signing key, and its added identity permissions need validation through Google Admin.
 
 ## Demonstrate a handoff
 

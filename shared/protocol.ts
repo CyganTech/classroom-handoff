@@ -30,6 +30,8 @@ export type WorkspaceGroup = z.infer<typeof groupSchema>;
 export const deviceNameSchema = z.string().trim().min(1).max(64);
 export interface Credentials { deviceId: string; token: string }
 export interface Device { id: string; name: string; online: boolean; lastSeen: number | null }
+export interface PairingRequest { id: string; source: Device; destination: Device; expiresAt: number }
+export interface DiscoveryResult { suggestions: Device[]; requests: PairingRequest[] }
 export type CommandStatus = 'pending' | 'applied' | 'failed' | 'expired';
 export interface PublicCommand { id: string; requestId: string; sourceId: string; destinationId: string; status: CommandStatus; createdAt: number; expiresAt: number; completedAt: number | null; error: string | null; warnings: string[] }
 export interface IncomingCommand extends PublicCommand { sourceName: string; workspace: Workspace }

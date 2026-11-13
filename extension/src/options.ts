@@ -2,6 +2,8 @@ import { normalizeBackendUrl } from '../../shared/protocol.js';
 import type { UiState } from '../../shared/ui.js';
 import { element, errorMessage, readState, renderConnection, requestUi, showText, startStatePolling } from './ui-client.js';
 
+import { renderPairingRequests } from './pairing-ui.js';
+
 const errorBox = element('error');
 const messageBox = element('message');
 const dialog = element<HTMLDialogElement>('confirm-dialog');
@@ -52,12 +54,42 @@ function render(next: UiState): void {
   for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('button:not([value])'))) button.disabled = busy;
   element<HTMLButtonElement>('register-submit').disabled = busy || !!next.managed && !next.managedBackendUrl;
   showText(errorBox, actionError || pollError || next.lastError);
+  renderDiscovery(next);
   renderPairing();
+}
+
+function renderDiscovery(next: UiState): void {
+  const discovery = next.discovery;
+  const toggle = element<HTMLInputElement>('discovery-enabled');
+  if (!busy) toggle.checked = discovery?.enabled ?? false;
+  toggle.disabled = busy;
+  const requests = discovery?.requests ?? [];
+  renderPairingRequests(element('pairing-requests'), requests, next.deviceId, busy, action => {
+    void runAction(async () => { await requestUi(action); }, action.action === 'pairing.accept' ? 'Browsers paired. You can now send handoffs.' : 'Pairing request declined.');
+  });
+  const suggestions = (discovery?.suggestions ?? []).filter(device => !requests.some(r => r.source.id === device.id || r.destination.id === device.id));
+  showText(element('discovery-status'), discovery?.error ?? (!discovery?.enabled ? 'Suggestions are off. You can always use a code below.' : !discovery.available ? 'No primary Chrome account is available. Sign in to the browser profile, or use a code below.' : `Using ${discovery.email ?? 'your Chrome profile account'}. ${suggestions.length ? 'Choose a browser, then approve on that browser.' : requests.length ? 'Waiting for the requests below.' : 'No other browsers found. Enable suggestions on your other browser using the same Chrome account and Handoff server, and keep it awake.'}`));
+  const list = element('suggestions');
+  const signature = JSON.stringify([suggestions, busy]);
+  if (list.dataset.rendered === signature) return;
+  list.dataset.rendered = signature;
+  list.replaceChildren(...suggestions.map(device => {
+    const row = document.createElement('li'); row.className = 'peer';
+    const content = document.createElement('div'); content.className = 'peer-content';
+    const name = document.createElement('div'); name.className = 'peer-name'; name.textContent = device.name;
+    const detail = document.createElement('div'); detail.className = 'peer-meta'; detail.textContent = 'Online · matching Chrome profile';
+    content.append(name, detail);
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary-button'; button.textContent = 'Easy pair'; button.disabled = busy;
+    button.setAttribute('aria-label', `Easy pair with ${device.name}`);
+    button.addEventListener('click', () => { void runAction(async () => { await requestUi({ action: 'pairing.request', destinationId: device.id }); }, 'Request sent. Open Handoff on the other browser to accept.'); });
+    row.append(content, button); return row;
+  }));
 }
 
 function renderPairing(): void {
   element('pairing-result').hidden = !pairing;
   if (!pairing) return;
+  element<HTMLButtonElement>('copy-code').disabled = busy || pairing.expiresAt <= Date.now();
   element('pairing-code').textContent = pairing.code;
   const seconds = Math.max(0, Math.ceil((pairing.expiresAt - Date.now()) / 1000));
   element('pairing-expiry').textContent = seconds > 0 ? `Expires in ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}. Use it once.` : 'This code has expired. Create a new code to pair another browser.';
@@ -106,6 +138,17 @@ element<HTMLFormElement>('rename-form').addEventListener('submit', event => {
   const name = nameInput.value.trim();
   if (!name) { showText(errorBox, 'Give this browser a name.'); return; }
   void runAction(async () => { const result = await requestUi({ action: 'rename', name }); if (result.state) state = result.state; }, 'Browser name saved.');
+});
+element<HTMLInputElement>('discovery-enabled').addEventListener('change', event => {
+  const enabled = (event.target as HTMLInputElement).checked;
+  void runAction(async () => { await requestUi({ action: 'discovery.enable', enabled }); });
+});
+element('copy-code').addEventListener('click', () => {
+  void runAction(async () => {
+    if (!pairing || pairing.expiresAt <= Date.now()) throw new Error('Create a new code before copying.');
+    try { await navigator.clipboard.writeText(pairing.code); }
+    catch { throw new Error('Could not copy. Select the code and copy it manually.'); }
+  }, 'Code copied. Paste it into your other browser.');
 });
 element('create-code').addEventListener('click', () => {
   void runAction(async () => { const result = await requestUi({ action: 'pairing.create' }); if (!result.pairing) throw new Error('The server did not return a pairing code.'); pairing = result.pairing; }, 'Pairing code created. Enter it on your other browser.');

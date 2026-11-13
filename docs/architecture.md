@@ -20,20 +20,35 @@ sequenceDiagram
 ## Components
 
 - `shared/protocol.ts`: strict Zod workspace/message schemas and wire types. `shared/ui.ts` defines popup/worker actions without exposing tokens to UI responses.
-- `server/store.ts`: synchronous prepared SQLite statements for device credential hashes, direct peer edges, single-use pairing codes and command state. WAL, foreign keys and a unique pending-destination index enforce local consistency.
+- `server/store.ts`: synchronous prepared SQLite statements for device credential hashes, direct peer edges, single-use pairing codes, opt-in discovery membership, expiring pairing requests and command state. WAL, foreign keys and a unique pending-destination index enforce local consistency.
 - `server/app.ts`: HTTP registration/pairing/handoff/status, authenticated WebSocket delivery, presence, acknowledgements, rate limits, expiry, payload bounds and graceful shutdown. `server/config.ts` owns environment settings.
 - `extension/src/background.ts`: trusted extension message boundary, persistent configuration/preferences/status and idempotent outbound retry. UI requests are serialized, status updates use a separate serialized queue.
 - `extension/src/transport.ts`: REST with deadlines and no credentials in URLs, first-frame socket authentication, schema checks, 20-second application heartbeat and exponential reconnect with jitter.
 - `extension/src/workspace.ts`: serialization and a serialized, journaled receive queue. Ownership is in Chrome session storage and receive receipts in local storage.
-- Popup and options: local TypeScript/HTML/CSS only. No remote code, content scripts, cookie permission or Google login integration.
+- Popup and options: local TypeScript/HTML/CSS only. No remote code, content scripts, cookie permission or Google OAuth login. Optional primary-profile discovery uses the Chrome identity API.
 
 ## Identity and authorization
 
-Registration creates a random UUID and 256-bit random bearer token. The token stays in `chrome.storage.local` restricted to trusted extension contexts; the backend stores its SHA-256 hash. There is no use of the Chrome profile email as authentication. Two devices pair by deliberately creating and claiming a five-minute single-use code with 72 random bits. Only symmetric direct peer links can send. For three devices, pair each required sender/receiver relationship separately; pairings are not transitively shared.
+Registration creates a random UUID and 256-bit random bearer token. The token stays in `chrome.storage.local` restricted to trusted extension contexts; the backend stores its SHA-256 hash. There is no use of the Chrome profile email as authentication. Two devices pair by deliberately creating and claiming a five-minute single-use code with eight characters from a 32-character alphabet (40 random bits), backed by the existing device/address attempt limits. New codes are displayed as `XXXX-XXXX`; legacy 18-character hexadecimal claims remain accepted until expiry. Code collisions are retried without overwriting another browser’s code. Only symmetric direct peer links can send. For three devices, pair each required sender/receiver relationship separately; pairings are not transitively shared.
 
 WebSockets authenticate in the first text frame within five seconds; tokens never appear in socket URLs. HTTP uses `Authorization: Bearer`. Acknowledgements are accepted only from the command destination. Peers can be removed, and disconnecting an installation revokes its credential and associations. Reset needs a reachable backend so credentials are not silently orphaned (an explicit invalid-credential HTTP 401 permits local reset); loss of all credentials/data requires a fresh registration. There is no administrator account or recovery portal in this POC.
 
 HTTPS/WSS is required for non-loopback deployments. Caddy terminates TLS and forwards privately to Node. The configuration checks allowed origin syntax; it cannot verify the operator’s proxy/network isolation. Anonymous registration is intentional for independently deployable pairing, with rate limits and socket/body caps. Strong user identity, invitations, organizational enrollment, quotas and distributed abuse prevention are later work.
+
+## Optional profile discovery and approved pairing
+
+Discovery is off initially. With explicit opt-in, `chrome.identity.getProfileUserInfo({ accountStatus: "ANY" })` reads the primary Chrome profile without OAuth. The extension hashes a versioned tuple of backend origin and stable account ID using SHA-256. Email is used only in local setup text. The account key is persistent pseudonymous metadata, not anonymous data or server-verifiable proof of Google ownership; the server continues to trust only device bearer credentials and explicit receiver approval.
+
+Authenticated APIs:
+
+- `PUT /api/discovery` accepts `{ accountKey: string | null }` (64 lowercase hexadecimal characters, or null to disable). Changing/removing a key transactionally deletes that device's pending pairing requests.
+- `GET /api/discovery` returns `{ suggestions: Device[], requests: PairingRequest[] }`. Suggestions are online, matching, unpaired peers only, without account keys. `GET /api/pairing-requests` lists the caller's unexpired requests.
+- `POST /api/pairing-requests` accepts `{ destinationId }`, validates opt-in matching and target presence, and creates or reuses a pending request for either direction of that pair.
+- `POST /api/pairing-requests/:id/accept` or `/decline` requires the named receiver. Acceptance revalidates membership and expiry and atomically consumes the request and creates the same symmetric peer link as manual pairing. Duplicate acceptance fails; a request grants no handoff authorization.
+
+`PairingRequest` includes ID, public source/destination device metadata, and expiry. Requests share the manual code creation/claim rate buckets and five-minute configurable pairing lifetime. Database changes are additive; expiry and foreign-key cascades clean up expired requests and revoked devices. No discovery messages are added to the existing WebSocket protocol.
+
+The background worker rechecks identity at startup, sign-in change, recovery and UI polling; disabling discovery or a changed/missing account clears server membership on the next successful sync. Published membership is recorded locally so failed cleanup retries after reconnection. Discovery failures stay separate from handoff status and leave manual pairing usable. Previously approved pairings survive identity changes or discovery opt-out. Deploy the backend before the extension; no extension/managed-release publication is implied by source changes.
 
 ## MV3 lifecycle and recovery
 
@@ -55,7 +70,7 @@ Chrome APIs and storage are not one atomic transaction. The receive journal and 
 
 ## Data and operational limits
 
-Only device names/IDs, hashed credentials, peer links, pairing-code hashes and command metadata are retained. Pending payloads contain URLs, pinned/selection flags and group metadata; no page contents, cookies, passwords, screenshots or unsaved form state are read. The backend is trusted with pending URLs, including any query tokens already present in them. This POC is transport-encrypted, not end-to-end encrypted. URLs are removed from logical rows on terminal status and SQLite secure-delete/checkpoint truncates WAL; existing backups, proxy logs and OS snapshots require their own retention controls. Default server logging avoids URLs/tokens/pair codes.
+Device names/IDs, hashed credentials, peer links, pairing-code hashes and command metadata are retained, plus account matching keys for opted-in discovery and short-lived pairing-request participants/expiry. Raw profile emails and account IDs are not sent to the backend. Pending payloads contain URLs, pinned/selection flags and group metadata; no page contents, cookies, passwords, screenshots or unsaved form state are read. The backend is trusted with pending URLs, including any query tokens already present in them. This POC is transport-encrypted, not end-to-end encrypted. URLs are removed from logical rows on terminal status and SQLite secure-delete/checkpoint truncates WAL; existing backups, proxy logs and OS snapshots require their own retention controls. Default server logging avoids URLs/tokens/pair codes.
 
 Use one backend process and a persistent local SQLite volume. Back up while stopped, restrict filesystem access, and protect the HTTPS endpoint. Registrations and peer links remain until revoked; expired pairing hashes and terminal command records are swept. No multi-replica coordination, organization isolation, database migration framework or production monitoring stack is implemented.
 

@@ -8,7 +8,7 @@ Record date, extension/backend version, Chrome version/OS, backend origin, proxy
 
 1. Follow README’s clean install and build instructions. Load `artifacts/extension` independently in A and B.
 2. Open Device setup on A. Enter server origin, name it “Teacher laptop”, connect and approve Chrome’s native server access prompt. Repeat on B as “Room display”. Confirm denial gives a useful error before retrying approval.
-3. Create a code on A; claim it on B. Confirm both show the other **Online** with the right name, without using a Google password or separate per-handoff login.
+3. Create a code on A; confirm `XXXX-XXXX` with eight easy-to-read characters. Copy it and verify the copied feedback. Claim it on B using lowercase and spaces around the hyphen. Confirm both show the other **Online** with the right name, without using a Google password or separate per-handoff login.
 4. Try claiming the same code on a third fresh profile: it must fail. Create a new code and let it expire before claiming: it must fail. A fresh unrelated profile must not see other devices.
 5. Rename B, verify A updates, choose B in A’s popup and reopen it: destination preference is remembered.
 
@@ -54,3 +54,15 @@ Record date, extension/backend version, Chrome version/OS, backend origin, proxy
 4. Rebuild package, check SHA-256, restart containers and verify pairing survives. Back up/restore the stopped database volume to a single instance and demonstrate reconnection.
 
 The automated suite covers validation, authorization, actual HTTP/WebSocket/SQLite delivery and browser restoration/recovery. See verification.md for the exact executed browser tests. Physical devices, ChromeOS, managed installation policies, external TLS and classroom display behavior remain manual acceptance items.
+
+
+## H — ChromeOS profile discovery and Easy pair
+
+1. On two actual Chrome/ChromeOS profiles with the extension, use the same primary Chrome account and server. Record ChromeOS/Chrome versions and whether installation is managed. Confirm suggestions start **off**, and manual pairing still works before opting in.
+2. Remove the manual peer link. Enable **Suggest my other browsers** on both. Confirm the browser names appear as online suggestions without any extension login or OAuth flow. A Google account signed in only on a website must not substitute for the primary Chrome profile account.
+3. Click **Easy pair** on A. Verify it remains unpaired and cannot send. Open B's popup; verify A's name, expiry and **Accept**/**Decline**. Decline and confirm the request disappears on both after polling. Request again, accept on B, and send an actual handoff.
+4. Repeat with different primary accounts and different server origins: neither should suggest the other. Sign out or use a guest profile; manual codes must still work. Close/sleep B and verify it is no longer suggested once presence expires.
+5. Request pairing and wait five minutes: no acceptance after expiry. Request again and change the profile account or turn suggestions off before accepting: pending requests must clear after synchronization. Previously approved pairings must remain until explicitly removed.
+6. Restart the backend and browser worker. Confirm opt-in/pairings survive and pending requests retain their original expiry. Disconnect a browser and confirm its discovery membership and requests are removed.
+7. Inspect discovery HTTP bodies and the database in a disposable test environment: only a 64-character matching key is published, never email or raw account ID. Different backend origins must yield different keys for the same account. Avoid copying live account metadata into reports.
+8. Verify the new identity permissions on a force-installed, enrolled Chromebook through Google Admin. Browser automation uses controlled identity data and does not establish native ChromeOS account availability or managed permission behavior.
