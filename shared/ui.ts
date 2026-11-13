@@ -4,6 +4,8 @@ export interface DiscoveryState {
   suggestions: Device[]; requests: PairingRequest[];
 }
 export interface UiState {
+  defaultName?: string; nameWarning?: string;
+  preferences?: { theme: 'system' | 'light' | 'dark'; currentTabOnly: boolean };
   discovery?: DiscoveryState;
   managed?: boolean; managedBackendUrl?: string;
   configured: boolean; backendUrl?: string; deviceId?: string; name?: string;
@@ -13,6 +15,7 @@ export interface UiState {
 }
 export type UiRequest =
   | { action: 'state' }
+  | { action: 'preferences.update'; theme?: 'system' | 'light' | 'dark'; currentTabOnly?: boolean }
   | { action: 'configure'; backendUrl: string; name: string }
   | { action: 'rename'; name: string }
   | { action: 'discovery.enable'; enabled: boolean }
@@ -22,6 +25,6 @@ export type UiRequest =
   | { action: 'pairing.claim'; code: string }
   | { action: 'peer.remove'; deviceId: string }
   | { action: 'destination'; deviceId: string }
-  | { action: 'handoff'; destinationId: string; windowId?: number }
+  | { action: 'handoff'; destinationId: string; windowId?: number; currentTabOnly?: boolean }
   | { action: 'reset' };
 export type UiResponse = { ok: true; state?: UiState; pairing?: { code: string; expiresAt: number }; command?: PublicCommand } | { ok: false; error: string };

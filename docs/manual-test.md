@@ -74,3 +74,11 @@ The automated suite covers validation, authorization, actual HTTP/WebSocket/SQLi
 2. Confirm **Advanced settings** starts collapsed and the main Suggested browsers section has no checkbox. Expand Advanced settings and turn **Suggest browsers automatically** off. Pending requests and membership must clear after synchronization; established pairings and manual codes must keep working.
 3. Reload setup, stop/restart the worker, and restart Chrome. The advanced opt-out must remain off. Re-enable it and confirm suggestions return. Future extension updates must preserve this post-migration choice.
 4. Repeat with a new installation, a missing primary Chrome account, a different primary account, and an unreachable backend. New profiles discover automatically when eligible; unavailable discovery must still offer manual codes and must never pair without receiver approval.
+
+
+## J — Branding, themes, names and current tab
+
+1. Update to 0.2.3. Inspect the extension toolbar, setup, popup and installer logo. Verify legibility at 16/32/48/128px, keyboard focus, text contrast, and absence of clipping in both themes and mobile-width setup.
+2. In Device setup choose System, change the OS theme, then try Light/Dark overrides. Open both popup and setup: overrides must synchronize and survive reopening/restart. The public installer follows its own system appearance.
+3. Confirm Only send current tab starts unchecked. Check it, reopen the popup, and send a selected grouped/pinned HTTP(S) tab. The receiver must contain only that selected tab in its managed handoff, preserving unrelated tabs. Try a selected Chrome settings tab with a supported tab beside it: reject without sending a different page. Uncheck and send the full window again.
+4. On new registrations inspect platform-based defaults and edit one before connecting. Upgrade an untouched legacy Managed browser +8 hex name: it should become a stable platform-based name. User names and current policy DeviceName must remain unchanged. Simulate a delayed/failed rename: other extension controls/handoffs stay responsive and migration retries later. Disconnect during an outstanding rename: revoked local configuration must never return.

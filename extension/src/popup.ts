@@ -14,6 +14,8 @@ let pollError: string | undefined;
 function render(next: UiState): void {
   state = next;
   renderConnection(next);
+  if (!busy) element<HTMLInputElement>('current-tab-only').checked = next.preferences?.currentTabOnly ?? false;
+  element<HTMLInputElement>('current-tab-only').disabled = busy;
   renderPairingRequests(element('pairing-requests'), next.discovery?.requests ?? [], next.deviceId, busy, action => {
     void runAction(async () => { const result = await requestUi(action); if (result.state) state = result.state; });
   });
@@ -73,6 +75,10 @@ destination.addEventListener('change', () => {
   if (!deviceId) { if (state) render(state); return; }
   void runAction(async () => { const result = await requestUi({ action: 'destination', deviceId }); if (result.state) state = result.state; });
 });
+element<HTMLInputElement>('current-tab-only').addEventListener('change', event => {
+  const currentTabOnly = (event.target as HTMLInputElement).checked;
+  void runAction(async () => { const result = await requestUi({ action: 'preferences.update', currentTabOnly }); if (result.state) state = result.state; });
+});
 handoff.addEventListener('click', () => {
   const destinationId = destination.value;
   if (!destinationId) return;
@@ -80,7 +86,7 @@ handoff.addEventListener('click', () => {
     let source = await chrome.windows.getCurrent({ populate: false });
     if (source.type !== 'normal') source = await chrome.windows.getLastFocused({ populate: false, windowTypes: ['normal'] });
     if (source.id === undefined || source.type !== 'normal') throw new Error('Open a normal browser window to send a workspace.');
-    const result = await requestUi({ action: 'handoff', destinationId, windowId: source.id });
+    const result = await requestUi({ action: 'handoff', destinationId, windowId: source.id, currentTabOnly: element<HTMLInputElement>('current-tab-only').checked });
     if (result.state) state = result.state;
     else if (result.command && state) state = { ...state, lastCommand: result.command };
   });

@@ -13,13 +13,15 @@ interface Journal { commandId: string; sourceName: string; expiresAt: number; le
 const OWNER = 'workspaceOwner'; const JOURNAL = 'receiveJournal'; const RECEIPTS = 'receiveReceipts';
 export const errorText = (error: unknown): string => (error instanceof Error ? error.message : 'Unexpected browser error').slice(0, 500);
 
-export async function captureWorkspace(api: BrowserApi, windowId?: number): Promise<{ workspace: Workspace; warnings: string[] }> {
+export async function captureWorkspace(api: BrowserApi, windowId?: number, currentTabOnly = false): Promise<{ workspace: Workspace; warnings: string[] }> {
   const win = windowId === undefined ? await api.windows.getLastFocused({ windowTypes: ['normal'] }) : await api.windows.get(windowId);
   if (win.type !== 'normal' || win.id === undefined || win.incognito) throw new Error('Choose a normal, non-incognito browser window');
   const all = (await api.tabs.query({ windowId: win.id })).sort((a, b) => a.index - b.index);
-  const supported = all.filter(t => isSupportedUrl(t.pendingUrl ?? t.url ?? ''));
+  const selected = currentTabOnly ? all.filter(t => t.active) : all;
+  if (currentTabOnly && (selected.length !== 1 || !isSupportedUrl(selected[0]!.pendingUrl ?? selected[0]!.url ?? ''))) throw new Error('The current tab cannot be sent. Choose an HTTP(S) page and try again.');
+  const supported = selected.filter(t => isSupportedUrl(t.pendingUrl ?? t.url ?? ''));
   const warnings: string[] = [];
-  if (all.length !== supported.length) warnings.push(`${all.length - supported.length} restricted or unsupported tab(s) were skipped. Only HTTP(S) pages can be handed off.`);
+  if (selected.length !== supported.length) warnings.push(`${selected.length - supported.length} restricted or unsupported tab(s) were skipped. Only HTTP(S) pages can be handed off.`);
   if (!supported.length) throw new Error('This window has no supported HTTP(S) tabs to hand off');
   if (supported.length > MAX_TABS) throw new Error(`A handoff supports at most ${MAX_TABS} tabs. Close some tabs and try again.`);
   const groups: Workspace['groups'] = [];

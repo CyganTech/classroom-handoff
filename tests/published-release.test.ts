@@ -24,6 +24,13 @@ test('committed managed package, manifest, update XML and metadata agree and con
     entries.set(name, data); offset = start + size;
   }
   const manifest = JSON.parse(entries.get('manifest.json')!.toString());
+  if (manifest.icons) {
+    for (const size of [16, 32, 48, 128]) {
+      const png = entries.get(manifest.icons[String(size)]); assert.ok(png, `Packaged icon ${size}`);
+      assert.equal(png.readUInt32BE(16), size); assert.equal(png.readUInt32BE(20), size);
+    }
+    assert.ok(entries.has('icons/logo.svg')); assert.ok(entries.has('theme.js'));
+  }
   assert.equal(manifest.version, release.version); assert.equal(manifest.key, verified.publicKey.toString('base64')); assert.equal(manifest.update_url, release.updateUrl);
   assert.equal(manifest.storage.managed_schema, 'managed-schema.json'); assert.ok(entries.has(manifest.storage.managed_schema)); assert.deepEqual(manifest.optional_host_permissions, []);
   assert.deepEqual(manifest.host_permissions, [release.backendPermission]);

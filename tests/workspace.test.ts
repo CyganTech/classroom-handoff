@@ -159,3 +159,22 @@ test('a browser without tab grouping support restores tabs with a limitation war
   const b = new Browser(); delete b.api.tabGroups; delete b.api.tabs.group;
   const result = await new WorkspaceReceiver(b.api).receive(command()); assert.equal(result.status, 'applied'); assert.match(result.warnings[0]!, /ungrouped/); assert.equal(b.tabs.size, 3);
 });
+
+test('current-tab capture sends only the selected tab with its group and leaves full-window capture unchanged', async () => {
+  const b = new Browser(); await b.add(1, 'https://one.example/'); const selected = await b.add(1, 'https://two.example/', false, true); await b.add(1, 'https://three.example/');
+  b.tabs.get(selected.id!)!.groupId = 7; b.groups.set(7, { id: 7, windowId: 1, title: 'Lesson', color: 'red', collapsed: false, shared: false });
+  const result = await captureWorkspace(b.api, 1, true);
+  assert.deepEqual(result.workspace.tabs, [{ url: 'https://two.example/', pinned: false, active: true, groupId: '7' }]);
+  assert.equal(result.workspace.groups[0]?.title, 'Lesson'); assert.deepEqual(result.warnings, []);
+  assert.equal((await captureWorkspace(b.api, 1)).workspace.tabs.length, 3);
+});
+test('current-tab capture rejects a restricted selected tab without substituting a supported tab', async () => {
+  const b = new Browser(); await b.add(1, 'https://one.example/'); await b.add(1, 'chrome://settings', false, true);
+  await assert.rejects(captureWorkspace(b.api, 1, true), /current tab.*HTTP\(S\)/i);
+});
+test('current-tab capture preserves a pinned selected tab and ignores the full-window tab limit', async () => {
+  const b = new Browser(); await b.add(1, 'https://selected.example/', true, true);
+  for (let i = 0; i < 101; i++) await b.add(1, `https://other.example/${i}`);
+  const result = await captureWorkspace(b.api, 1, true);
+  assert.equal(result.workspace.tabs.length, 1); assert.equal(result.workspace.tabs[0]?.pinned, true); assert.equal(result.workspace.tabs[0]?.active, true);
+});

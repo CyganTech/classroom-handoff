@@ -43,6 +43,16 @@ The extension needs Chrome's `identity` and `identity.email` permissions to read
 
 The discovery backend introduced with 0.2.1 is required; the automatic-suggestions update in 0.2.2 requires no additional backend update. Additive SQLite tables preserve registrations and peers; old extensions continue using their existing handoff protocol. Managed updates use the signed package and update feed linked above. Publishing source alone does not deploy a backend. Releases retain the existing signing key and extension ID; identity permission behavior still needs validation through Google Admin.
 
+## Appearance, browser names, and sending one tab
+
+Version 0.2.3 adds red window-and-arrow branding with light-gray/white light mode and black/charcoal dark mode. Device setup → **Appearance** offers **System**, **Light**, or **Dark**; System follows your computer, and an override is saved locally and synchronized between open extension pages. The public installation page follows the system theme.
+
+The popup's **Only send current tab** checkbox starts off and remembers your choice on this browser. When checked, Handoff sends only the source window's selected HTTP(S) tab, including its pinned state and applicable group. A restricted selected page reports an error instead of choosing another tab. The receiver still replaces its previous managed handoff tabs; unrelated tabs remain preserved. Leave the checkbox off to send the full window.
+
+Default names now describe the platform, such as **Chromebook · 7K2M**, **Windows browser · 4R8P**, **Mac browser · …**, or **Linux browser · …**. A stable local suffix distinguishes installations. Setup prefills the name; you can edit it, and administrator-specified initial names still take precedence. Untouched legacy names matching exactly `Managed browser ` plus eight hexadecimal characters are updated in the background, unless they match the current administrator policy. Other existing names remain unchanged. New registrations/renames record name provenance; failed migrations retry without delaying handoffs or restoring disconnected identities.
+
+This update keeps the existing backend API and workspace format. No backend update is needed when the 0.2.1 discovery backend is already installed. The managed release retains the same extension ID and update URL.
+
 ## Demonstrate a handoff
 
 Open five ordinary HTTP(S) website tabs in a normal window on A, select the tab you want to present, open the toolbar extension, choose B and click **Handoff**. B opens a dedicated handoff window without opening its popup or accepting a per-transfer prompt. A shows **Waiting** until B confirms that Chrome created the workspace, then **Workspace opened**. Website loading, permission dialogs and successful website sign-in are separate from this acknowledgement.

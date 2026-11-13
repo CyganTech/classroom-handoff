@@ -9,7 +9,7 @@ await rm('dist', { recursive: true, force: true });
 await import('./build-server.mjs');
 await rm('artifacts/extension', { recursive: true, force: true });
 await mkdir('artifacts/extension', { recursive: true });
-await build({ entryPoints: ['extension/src/background.ts', 'extension/src/popup.ts', 'extension/src/options.ts'], outdir: 'artifacts/extension', bundle: true, platform: 'browser', target: 'chrome120', format: 'esm', sourcemap: true });
+await build({ entryPoints: ['extension/src/background.ts', 'extension/src/popup.ts', 'extension/src/options.ts', 'extension/src/theme.ts'], outdir: 'artifacts/extension', bundle: true, platform: 'browser', target: 'chrome120', format: 'esm', sourcemap: true });
 for (const file of ['manifest.json', 'popup.html', 'options.html', 'styles.css', 'staging.html', 'managed-schema.json']) await cp(`extension/${file}`, `artifacts/extension/${file}`);
 try { await cp('extension/icons', 'artifacts/extension/icons', { recursive: true }); } catch (e) { if (e.code !== 'ENOENT') throw e; }
 const manifest = JSON.parse(await readFile('artifacts/extension/manifest.json', 'utf8'));

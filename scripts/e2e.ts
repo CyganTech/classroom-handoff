@@ -62,6 +62,28 @@ async function until<T>(read: () => Promise<T>, predicate: (value: T) => boolean
   while (Date.now() - started < timeout) { last = await read(); if (predicate(last)) return last; await new Promise(done => setTimeout(done, 250)); }
   throw new Error(`Timeout: ${label}. Last value: ${JSON.stringify(last)}`);
 }
+async function checkContrast(page: Page): Promise<void> {
+  const pairs = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('label,p,h1,h2,h3,button,select,input,dt,dd,summary,.peer-name,.peer-meta')).filter(node => {
+    const style = getComputedStyle(node);
+    return node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0 && !node.hasAttribute('disabled') && Number(style.opacity) === 1 && !node.closest('[hidden]');
+  }).map(node => {
+    let current: Element | null = node; let background = '';
+    while (current) { background = getComputedStyle(current).backgroundColor; if (background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent') break; current = current.parentElement; }
+    return { text: node.textContent?.slice(0, 50), foreground: getComputedStyle(node).color, background };
+  }));
+  for (const pair of pairs) {
+    const luminance = (color: string) => {
+      const values = color.match(/[\d.]+/g)!.slice(0, 3).map(v => { const c = Number(v) / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+      return values[0]! * 0.2126 + values[1]! * 0.7152 + values[2]! * 0.0722;
+    };
+    const a = luminance(pair.foreground); const b = luminance(pair.background);
+    assert.ok((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 4.5, `Text contrast: ${JSON.stringify(pair)}`);
+  }
+}
+async function themeIs(page: Page, expected: string) {
+  await until(() => page.locator('html').getAttribute('data-theme'), value => value === expected, `theme ${expected}`);
+}
+
 async function register(page: Page, name: string) {
   await page.locator('#backend-url').fill(address.url);
   await page.locator('#register-name').fill(name);
@@ -71,6 +93,7 @@ async function register(page: Page, name: string) {
 try {
   console.log('Launching two independently stored extension installations…');
   const a = await browser('sender'); let b = await browser('receiver');
+  await until(() => a.options.locator('#register-name').inputValue(), value => / · [2-9A-HJ-NP-Z]{4}$/.test(value), 'prefilled platform browser name');
   await register(a.options, 'Teacher laptop'); await register(b.options, 'Classroom display');
   await a.options.locator('#create-code').click();
   const code = await until(() => a.options.locator('#pairing-code').innerText(), text => /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/.test(text), 'pairing code');
@@ -168,7 +191,51 @@ try {
   assert.equal(unrelated.isClosed(), false);
   console.log('PASS B/C: popup Handoff -> backend -> receiver (UI closed) restores five ordered tabs, pinned flag, active tab and two groups');
   await until(() => popup.locator('#command-status').innerText(), text => text.includes('Workspace opened'), 'applied UI feedback');
-  await popup.screenshot({ path: join(evidence, 'popup-applied.png') });
+  await popup.locator('body').screenshot({ path: join(evidence, 'popup-applied.png') });
+  await a.options.emulateMedia({ colorScheme: 'light' }); await popup.emulateMedia({ colorScheme: 'light' });
+  await themeIs(popup, 'light');
+  for (const theme of ['dark', 'light'] as const) {
+    await a.options.locator('#theme-choice').selectOption(theme);
+    await themeIs(a.options, theme); await themeIs(popup, theme);
+    await until(() => a.options.locator('#theme-choice').isEnabled(), Boolean, 'appearance save completed');
+    await checkContrast(popup); await checkContrast(a.options);
+    await popup.locator('body').screenshot({ path: join(evidence, `popup-${theme}.png`) });
+    await a.options.screenshot({ path: join(evidence, `setup-${theme}.png`), fullPage: true });
+  }
+  await a.options.reload(); await themeIs(a.options, 'light');
+  await a.options.locator('#theme-choice').selectOption('system');
+  await a.options.emulateMedia({ colorScheme: 'dark' }); await popup.emulateMedia({ colorScheme: 'dark' });
+  await themeIs(popup, 'dark'); await themeIs(a.options, 'dark');
+  await until(() => a.options.locator('#theme-choice').isEnabled(), Boolean, 'system appearance save completed');
+  await a.options.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await a.options.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await a.options.screenshot({ path: join(evidence, 'setup-dark-mobile.png'), fullPage: true });
+  await a.options.setViewportSize({ width: 1200, height: 950 });
+  await a.options.locator('#reset').click();
+  await a.options.locator('#confirm-dialog').waitFor({ state: 'visible' });
+  await checkContrast(a.options);
+  await a.options.screenshot({ path: join(evidence, 'dialog-dark.png') });
+  await a.options.locator('#confirm-dialog button[value=cancel]').click();
+  await a.options.locator('#theme-choice').selectOption('light');
+  // The simulated popup is a tab. Restore the lesson as the active source tab,
+  // then exercise the actual checkbox and Handoff controls.
+  await popup.locator('#current-tab-only').check();
+  await until(() => state(a.options), value => value.preferences?.currentTabOnly === true, 'saved single-tab preference');
+  await popup.reload(); await until(() => popup.locator('#current-tab-only').isChecked(), Boolean, 'single-tab preference after reopen');
+  await a.worker.evaluate(async id => { await chrome.tabs.update(id, { active: true }); }, source.tabIds[2]!);
+  await popup.locator('#handoff').click();
+  const single = await until(() => state(a.options), value => value.lastCommand?.status === 'applied' && value.lastCommand.id !== applied.lastCommand!.id, 'single-tab handoff applied');
+  assert.deepEqual((await readReceiver()).tabs.map(t => t.url), [urls[2]]);
+  assert.equal((await readReceiver()).groups[0]?.title, 'Science');
+  const restricted = await a.worker.evaluate(async windowId => { const tab = await chrome.tabs.create({ windowId, url: 'chrome://settings', active: true }); return tab.id!; }, source.windowId);
+  const rejected = await request(a.options, { action: 'handoff', destinationId, windowId: source.windowId, currentTabOnly: true });
+  assert.equal(rejected.ok, false);
+  assert.equal((await state(a.options)).lastCommand?.id, single.lastCommand?.id);
+  assert.deepEqual((await readReceiver()).tabs.map(t => t.url), [urls[2]]);
+  await a.worker.evaluate(async ({ restricted, active }) => { await chrome.tabs.remove(restricted); await chrome.tabs.update(active, { active: true }); }, { restricted, active: source.tabIds[2]! });
+  await popup.locator('#current-tab-only').uncheck();
+  await until(() => state(a.options), value => value.preferences?.currentTabOnly === false, 'restore whole-window preference');
+  console.log('PASS: both themes, system changes, synchronized overrides, contrast, dialog/mobile setup, saved single-tab capture and restricted-tab rejection');
   console.log('Checking receiver stays available beyond the 30-second worker idle window…');
   await new Promise(done => setTimeout(done, 35000));
   const cdp = await b.context.newCDPSession(unrelated);
@@ -189,7 +256,7 @@ try {
   await cdp.detach();
   console.log('PASS: stopped receiver service worker recovers through its alarm without opening receiver UI');
   await a.worker.evaluate(async ({ tabIds }) => { await chrome.tabs.remove([tabIds[3]!, tabIds[4]!]); await chrome.tabs.update(tabIds[1]!, { active: true }); }, source);
-  const previousId = applied.lastCommand!.id;
+  const previousId = (await state(a.options)).lastCommand!.id;
   await until(() => popup.locator('#handoff').isEnabled(), Boolean, 'repeat handoff button ready');
   await popup.locator('#handoff').click();
   await until(() => state(a.options), value => value.lastCommand?.status === 'applied' && value.lastCommand.id !== previousId, 'repeat applied');

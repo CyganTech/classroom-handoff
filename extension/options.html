@@ -5,14 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Device setup · Classroom Handoff</title>
     <link rel="stylesheet" href="styles.css">
+    <script type="module" src="theme.js"></script>
     <script type="module" src="options.js"></script>
   </head>
   <body class="options-page">
     <main class="options-shell">
-      <header class="options-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h11v9H4zM9 10h11v9H9" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m12 13 3 3-3 3m-3-3h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>Classroom <strong>Handoff</strong></span></div><span class="eyebrow">DEVICE SETUP</span></header>
+      <header class="options-header"><div class="brand"><img class="brand-mark" src="icons/logo.svg" alt="" width="40" height="40"><span>Classroom <strong>Handoff</strong></span></div><span class="eyebrow">DEVICE SETUP</span></header>
       <div class="page-intro"><h1>A little setup. A smoother day.</h1><p>Connect to your handoff server, then pair the browsers you want to use together.</p></div>
       <div id="error" class="notice error" role="alert" hidden></div>
       <div id="managed-notice" class="notice" role="status" hidden></div>
+      <div id="name-warning" class="notice" role="status" hidden></div>
       <div id="message" class="notice success" role="status" aria-live="polite" hidden></div>
       <section id="registration" class="card" hidden>
         <div class="section-heading"><span class="step-number" aria-hidden="true">1</span><div><h2>Connect this browser</h2><p>Use the server address provided by the person running your handoff server.</p></div></div>
@@ -25,6 +27,7 @@
       <div id="configured" hidden>
         <section class="card">
           <div class="card-title-row"><h2>This browser</h2><span class="connection-pill"><span id="connection-dot" class="connection-dot" aria-hidden="true"></span><span id="connection-status" role="status">Checking connection…</span></span></div>
+          <label for="theme-choice">Appearance</label><select id="theme-choice"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
           <form id="rename-form" class="inline-form"><div class="grow"><label for="device-name">Browser name</label><input id="device-name" type="text" maxlength="64" autocomplete="off" required></div><button class="secondary-button" type="submit">Save name</button></form>
           <dl class="device-details"><div><dt>Server</dt><dd id="backend-display"></dd></div><div><dt>Device ID</dt><dd id="device-id"></dd></div></dl>
           <p class="field-help">Keep this browser open and your computer awake to receive handoffs automatically.</p>

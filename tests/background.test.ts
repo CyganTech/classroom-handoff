@@ -72,3 +72,16 @@ test('a delayed 404 cannot replace a newer command that completed while status w
   try { const result = await controller.request({ action: 'state' }); assert.equal(result.ok, true); if (result.ok) { assert.equal(result.state?.lastCommand?.id, newer.id); assert.equal(result.state?.lastCommand?.status, 'applied'); assert.equal(result.state?.lastCommand?.error, null); } }
   finally { await controller.request({ action: 'reset' }); for (const socket of wss.clients) socket.terminate(); await new Promise<void>(resolve => wss.close(() => resolve())); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
+
+test('appearance and current-tab preferences persist independently and reject invalid values', async () => {
+  const { api, data } = memoryApi(); const controller = new BackgroundController(api);
+  const initial = await controller.request({ action: 'state' }); assert.ok(initial.ok);
+  if (initial.ok) assert.deepEqual(initial.state?.preferences, { theme: 'system', currentTabOnly: false });
+  assert.ok((await controller.request({ action: 'preferences.update', theme: 'dark' })).ok);
+  assert.ok((await controller.request({ action: 'preferences.update', currentTabOnly: true })).ok);
+  assert.deepEqual(data.uiPreferences, { theme: 'dark', currentTabOnly: true });
+  const reopened = await new BackgroundController(api).request({ action: 'state' }); assert.ok(reopened.ok);
+  if (reopened.ok) assert.deepEqual(reopened.state?.preferences, { theme: 'dark', currentTabOnly: true });
+  assert.equal((await controller.request({ action: 'preferences.update', theme: 'invalid' } as never)).ok, false);
+  assert.deepEqual(data.uiPreferences, { theme: 'dark', currentTabOnly: true });
+});

@@ -19,6 +19,11 @@ function render(next: UiState): void {
   element('registration').hidden = next.configured;
   element('configured').hidden = !next.configured;
   renderConnection(next);
+  if (!busy) element<HTMLSelectElement>('theme-choice').value = next.preferences?.theme ?? 'system';
+  element<HTMLSelectElement>('theme-choice').disabled = busy;
+  const registerName = element<HTMLInputElement>('register-name');
+  if (!registerName.value && document.activeElement !== registerName) registerName.value = next.defaultName ?? '';
+  showText(element('name-warning'), next.nameWarning);
   const backendInput = element<HTMLInputElement>('backend-url');
   backendInput.readOnly = !!next.managed;
   if (next.managed && document.activeElement !== backendInput) backendInput.value = next.managedBackendUrl ?? '';
@@ -138,6 +143,10 @@ element<HTMLFormElement>('rename-form').addEventListener('submit', event => {
   const name = nameInput.value.trim();
   if (!name) { showText(errorBox, 'Give this browser a name.'); return; }
   void runAction(async () => { const result = await requestUi({ action: 'rename', name }); if (result.state) state = result.state; }, 'Browser name saved.');
+});
+element<HTMLSelectElement>('theme-choice').addEventListener('change', event => {
+  const theme = (event.target as HTMLSelectElement).value as 'system' | 'light' | 'dark';
+  void runAction(async () => { await requestUi({ action: 'preferences.update', theme }); });
 });
 element<HTMLInputElement>('discovery-enabled').addEventListener('change', event => {
   const enabled = (event.target as HTMLInputElement).checked;

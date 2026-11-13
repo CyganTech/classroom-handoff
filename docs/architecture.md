@@ -86,3 +86,12 @@ Use one backend process and a persistent local SQLite volume. Back up while stop
 ## Recommended next milestone
 
 Pilot the demonstrator with two managed district devices through a deployed HTTPS backend. Validate ChromeOS, policies, sleep/wake, proxy/TLS, display focus and website sign-in behavior. Then introduce organizational enrollment and remote device revocation with an audited identity provider, plus an operator view of delivery errors and deployment monitoring, before expanding beyond trusted POC users.
+
+
+## Branding and local usability preferences (0.2.3)
+
+`uiPreferences` stores System/Light/Dark and the current-tab checkbox locally; defaults are System and false. Trusted UI uses `preferences.update` for validated partial updates and reads the result through UiState. Extension pages initialize theme early, follow system media changes when appropriate, and listen for storage changes to synchronize overrides. Public installation CSS follows system appearance without extension APIs. Source SVG and checked-in 16/32/48/128 PNG icons ship in both package variants; `scripts/build-icons.mjs` reproduces the PNGs with Playwright.
+
+The internal handoff action accepts optional `currentTabOnly`. Omission preserves full-window capture; true selects the actual active source tab before URL filtering and tab limits. Unsupported active pages fail without substitution. Pinned/group metadata remain valid in the unchanged workspace schema; receiving replacement/recovery behavior is unchanged.
+
+Default-name initialization is single-flight per API instance and persists the platform label and four-character suffix. Configuration tracks generated/custom/policy provenance going forward. Historical names without provenance are migrated only by the exact legacy-name pattern, excluding the current policy name. Migration HTTP runs on a separate name queue with one in-flight attempt and a 30-second retry interval. Explicit renames use that same name queue, so a custom rename wins. Successful migration schedules (without awaiting from the name queue) a revalidated local commit on the action queue, preventing reset/configuration races and avoiding queue deadlocks. Name failures are non-blocking setup notices.

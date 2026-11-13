@@ -5,7 +5,9 @@ import { ApiError, BackendClient, RealtimeTransport, type ConnectionSettings } f
 import { captureWorkspace, errorText, WorkspaceReceiver } from './workspace.js';
 import { ProfileDiscovery, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED, DISCOVERY_PREFERENCES_VERSION } from './discovery.js';
 import { isManagedRelease, parseManagedPolicy, type ManagedPolicy } from './managed.js';
-interface Configuration extends ConnectionSettings { name: string }
+import { defaultBrowserName, shouldMigrateName, type NameSource } from './naming.js';
+import { readPreferences, UI_PREFERENCES } from './preferences.js';
+interface Configuration extends ConnectionSettings { name: string; nameSource?: NameSource }
 type Status = Omit<UiState, 'configured' | 'backendUrl' | 'deviceId' | 'name' | 'lastReceived'>;
 interface Outbound { requestId: string; destinationId: string; workspace: Workspace; createdAt: number }
 const CONFIG = 'configuration'; const STATUS = 'uiStatus'; const OUTBOUND = 'outboundRequest'; const ALARM = 'handoff-recovery';
@@ -17,6 +19,10 @@ export function isTrustedSender(sender: Pick<chrome.runtime.MessageSender, 'id' 
 }
 
 export class BackgroundController {
+  private nameWarning?: string;
+  private nameQueue: Promise<unknown> = Promise.resolve();
+  private nameMigration?: Promise<void>;
+  private nextNameMigration = 0;
   private readonly discovery: ProfileDiscovery;
   private readonly receiver: WorkspaceReceiver;
   private readonly transport: RealtimeTransport;
@@ -27,7 +33,7 @@ export class BackgroundController {
   private policyQueue: Promise<unknown> = Promise.resolve();
   private nextRegistrationAttempt = 0;
   private sending?: Promise<PublicCommand | undefined>;
-  constructor(private readonly api: typeof chrome) {
+  constructor(private readonly api: typeof chrome, private readonly now: () => number = Date.now) {
     this.discovery = new ProfileDiscovery(api);
     this.receiver = new WorkspaceReceiver(api);
     this.transport = new RealtimeTransport({
@@ -60,9 +66,9 @@ export class BackgroundController {
       if (!config && this.policy.backendUrl && this.policy.autoRegister && Date.now() >= this.nextRegistrationAttempt) {
         this.nextRegistrationAttempt = Date.now() + 30_000;
         if (!await this.api.permissions.contains({ origins: [`${this.policy.backendUrl}/*`] })) throw new Error('The managed backend is outside this extension package’s permitted server origin. Install a release built for this server.');
-        const name = this.policy.deviceName ?? `Managed browser ${crypto.randomUUID().slice(0, 8)}`;
+        const name = this.policy.deviceName ?? await defaultBrowserName(this.api);
         const credentials = registrationSchema.parse(await new BackendClient(this.policy.backendUrl).request('/api/devices/register', 'POST', { name }));
-        await this.api.storage.local.set({ [CONFIG]: { backendUrl: this.policy.backendUrl, name, credentials } satisfies Configuration });
+        await this.api.storage.local.set({ [CONFIG]: { backendUrl: this.policy.backendUrl, name, nameSource: this.policy.deviceName ? 'policy' : 'generated', credentials } satisfies Configuration });
         await this.updateStatus({ connected: false, devices: [], lastError: undefined });
         this.transport.restart();
       } else if (wasBlocked && await this.configuration()) this.transport.restart();
@@ -71,6 +77,33 @@ export class BackgroundController {
       this.transport.stop();
       await this.updateStatus({ connected: false, lastError: this.policyError });
     }
+  }
+  private enqueueNameChange<T>(operation: () => Promise<T>): Promise<T> {
+    const work = this.nameQueue.then(operation); this.nameQueue = work.catch(() => undefined); return work;
+  }
+  private scheduleNameMigration(): void {
+    if (this.nameMigration || this.now() < this.nextNameMigration) return;
+    this.nextNameMigration = this.now() + 30_000;
+    const work = this.enqueueNameChange(() => this.migrateLegacyName()); this.nameMigration = work;
+    void work.finally(() => { if (this.nameMigration === work) this.nameMigration = undefined; }).catch(() => undefined);
+  }
+  private async migrateLegacyName(): Promise<void> {
+    this.nameWarning = undefined;
+    const config = await this.configuration();
+    if (!config || !shouldMigrateName(config, this.policy.deviceName)) return;
+    try {
+      const name = await defaultBrowserName(this.api);
+      await new BackendClient(config.backendUrl, config.credentials).request('/api/device', 'PATCH', { name });
+      // Commit on the configuration/action queue, without awaiting it from the
+      // name queue: explicit renames can wait for that queue without deadlocking.
+      // Reset/policy/configuration changes therefore cannot race this local write.
+      void this.enqueueOperation(async () => {
+        const current = await this.configuration();
+        if (current?.credentials.deviceId === config.credentials.deviceId && current.name === config.name && current.nameSource === config.nameSource) {
+          await this.api.storage.local.set({ [CONFIG]: { ...config, name, nameSource: 'generated' } satisfies Configuration });
+        }
+      }).catch(() => { this.nameWarning = 'The browser name could not be saved yet. The update will retry.'; });
+    } catch { this.nameWarning = 'The browser name could not be updated yet. Handoffs still work; the name update will retry.'; }
   }
   private async client(): Promise<BackendClient> { const config = await this.configuration(); if (!config) throw new Error(this.policyError ?? 'Set up this browser first'); return new BackendClient(config.backendUrl, config.credentials); }
   private updateStatus(patch: Partial<Status>): Promise<void> {
@@ -93,12 +126,12 @@ export class BackgroundController {
     return this.enqueueOperation(async () => {
       await Promise.all([this.api.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }), this.api.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })]);
       await this.api.alarms.create(ALARM, { periodInMinutes: 0.5 });
-      await this.applyManagedPolicy(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected();
+      await this.applyManagedPolicy(); this.scheduleNameMigration(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected();
     });
   }
   recover(): Promise<void> {
     return this.enqueueOperation(async () => {
-      try { await this.applyManagedPolicy(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected(); await this.retryOutbound(); await this.refreshCommand(); }
+      try { await this.applyManagedPolicy(); this.scheduleNameMigration(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected(); await this.retryOutbound(); await this.refreshCommand(); }
       catch (error) { await this.updateStatus({ lastError: errorText(error) }); }
     });
   }
@@ -148,7 +181,7 @@ export class BackgroundController {
     const values = await this.api.storage.local.get([STATUS, 'lastReceived']);
     const status = values[STATUS] as Status | undefined;
     const discovery = await this.discovery.sync(await this.configuration());
-    return { ...status, discovery, managed: isManagedRelease || !!this.policy.backendUrl || !!this.policyError, managedBackendUrl: this.policy.backendUrl, configured: !!config, ...(config ? { backendUrl: config.backendUrl, deviceId: config.credentials.deviceId, name: config.name } : {}), connected: this.transport.isConnected, devices: status?.devices ?? [], ...(values.lastReceived ? { lastReceived: values.lastReceived as UiState['lastReceived'] } : {}) };
+    return { ...status, discovery, preferences: await readPreferences(this.api), defaultName: this.policy.deviceName ?? await defaultBrowserName(this.api), nameWarning: this.nameWarning, managed: isManagedRelease || !!this.policy.backendUrl || !!this.policyError, managedBackendUrl: this.policy.backendUrl, configured: !!config, ...(config ? { backendUrl: config.backendUrl, deviceId: config.credentials.deviceId, name: config.name } : {}), connected: this.transport.isConnected, devices: status?.devices ?? [], ...(values.lastReceived ? { lastReceived: values.lastReceived as UiState['lastReceived'] } : {}) };
   }
   private retryOutbound(): Promise<PublicCommand | undefined> {
     if (this.sending) return this.sending;
@@ -172,13 +205,21 @@ export class BackgroundController {
   }
   request(request: UiRequest): Promise<UiResponse> {
     return this.enqueueOperation(async () => {
-      try { await this.applyManagedPolicy(); return await this.handle(request); }
+      try { await this.applyManagedPolicy(); this.scheduleNameMigration(); return await this.handle(request); }
       catch (error) { const message = errorText(error); await this.updateStatus({ lastError: message }); return { ok: false, error: message }; }
     });
   }
   private async handle(request: UiRequest): Promise<UiResponse> {
     if (!request || typeof request !== 'object') throw new Error('Invalid extension request');
     switch (request.action) {
+      case 'preferences.update': {
+        const patch = z.object({ action: z.literal('preferences.update'), theme: z.enum(['system', 'light', 'dark']).optional(), currentTabOnly: z.boolean().optional() }).strict().parse(request);
+        const preferences = await readPreferences(this.api);
+        if (patch.theme !== undefined) preferences.theme = patch.theme;
+        if (patch.currentTabOnly !== undefined) preferences.currentTabOnly = patch.currentTabOnly;
+        await this.api.storage.local.set({ [UI_PREFERENCES]: preferences });
+        return { ok: true, state: await this.state() };
+      }
       case 'state': return { ok: true, state: await this.state() };
       case 'configure': {
         if (await this.configuration()) throw new Error('This browser is already registered. Reset it before changing the backend.');
@@ -188,13 +229,19 @@ export class BackgroundController {
         const name = deviceNameSchema.parse(request.name);
         if (!await this.api.permissions.contains({ origins: [`${backendUrl}/*`] })) throw new Error(this.policy.backendUrl ? 'The managed backend is outside this package’s permitted server origin. Install a release built for this server.' : 'Allow access to this backend from the setup page, then try again.');
         const registration = registrationSchema.parse(await new BackendClient(backendUrl).request('/api/devices/register', 'POST', { name }));
-        await this.api.storage.local.set({ [CONFIG]: { backendUrl, name, credentials: registration } satisfies Configuration });
+        await this.api.storage.local.set({ [CONFIG]: { backendUrl, name, nameSource: name === this.policy.deviceName ? 'policy' : name === await defaultBrowserName(this.api) ? 'generated' : 'custom', credentials: registration } satisfies Configuration });
         await this.updateStatus({ connected: false, devices: [], lastError: undefined }); this.transport.restart();
         return { ok: true, state: await this.state() };
       }
       case 'rename': {
-        const name = deviceNameSchema.parse(request.name); const config = await this.configuration(); if (!config) throw new Error('Set up this browser first');
-        await (await this.client()).request('/api/device', 'PATCH', { name }); await this.api.storage.local.set({ [CONFIG]: { ...config, name } }); return { ok: true, state: await this.state() };
+        const name = deviceNameSchema.parse(request.name);
+        await this.enqueueNameChange(async () => {
+          const config = await this.configuration(); if (!config) throw new Error('Set up this browser first');
+          await (await this.client()).request('/api/device', 'PATCH', { name });
+          await this.api.storage.local.set({ [CONFIG]: { ...config, name, nameSource: 'custom' } satisfies Configuration });
+          this.nameWarning = undefined;
+        });
+        return { ok: true, state: await this.state() };
       }
       case 'discovery.enable': {
         z.boolean().parse(request.enabled);
@@ -231,7 +278,8 @@ export class BackgroundController {
         const destinationId = z.string().uuid().parse(request.destinationId);
         if (request.windowId !== undefined) z.number().int().nonnegative().parse(request.windowId);
         if ((await this.api.storage.local.get(OUTBOUND))[OUTBOUND]) { await this.retryOutbound(); throw new Error('The previous send has been checked. Review its status before sending another workspace.'); }
-        const { workspace, warnings } = await captureWorkspace(this.api, request.windowId);
+        if (request.currentTabOnly !== undefined) z.boolean().parse(request.currentTabOnly);
+        const { workspace, warnings } = await captureWorkspace(this.api, request.windowId, request.currentTabOnly ?? false);
         const outbound: Outbound = { requestId: crypto.randomUUID(), destinationId, workspace, createdAt: Date.now() };
         await this.api.storage.local.set({ [OUTBOUND]: outbound }); await this.updateStatus({ preferredDestinationId: destinationId, captureWarnings: warnings, lastError: undefined });
         const command = await this.retryOutbound(); if (!command) throw new Error('The handoff could not be submitted');

@@ -26,8 +26,8 @@ try { const previous = JSON.parse(await readFile(`${site}/release.json`, 'utf8')
 catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 execFileSync(process.execPath, ['scripts/build.mjs'], { stdio: 'inherit' });
 await rm(unpacked, { recursive: true, force: true }); await cp('artifacts/extension', unpacked, { recursive: true });
-await build({ entryPoints: ['extension/src/background.ts', 'extension/src/popup.ts', 'extension/src/options.ts'], outdir: unpacked, bundle: true, platform: 'browser', target: 'chrome120', format: 'esm', sourcemap: false, define: { __HANDOFF_MANAGED_RELEASE__: 'true' } });
-for (const file of ['background.js.map', 'popup.js.map', 'options.js.map']) await rm(`${unpacked}/${file}`, { force: true });
+await build({ entryPoints: ['extension/src/background.ts', 'extension/src/popup.ts', 'extension/src/options.ts', 'extension/src/theme.ts'], outdir: unpacked, bundle: true, platform: 'browser', target: 'chrome120', format: 'esm', sourcemap: false, define: { __HANDOFF_MANAGED_RELEASE__: 'true' } });
+for (const file of ['background.js.map', 'popup.js.map', 'options.js.map', 'theme.js.map']) await rm(`${unpacked}/${file}`, { force: true });
 const original = JSON.parse(await readFile('extension/manifest.json', 'utf8'));
 const manifest = createManagedManifest(original, publicKey, new URL('updates.xml', base).href, values['backend-url']);
 await writeFile(`${unpacked}/manifest.json`, JSON.stringify(manifest, null, 2) + '\n');
@@ -48,4 +48,5 @@ await writeFile(`${site}/.nojekyll`, '');
 let html = await readFile('deployment/install.html', 'utf8');
 for (const [find, replacement] of Object.entries({ '__EXTENSION_ID__': id, '__UPDATE_URL__': release.updateUrl, '__CRX_FILENAME__': filename, '__VERSION__': version })) html = html.replaceAll(find, replacement);
 await writeFile(`${site}/index.html`, html); await cp('deployment/install.js', `${site}/install.js`);
+await cp('extension/styles.css', `${site}/brand.css`); await cp('extension/icons', `${site}/icons`, { recursive: true });
 console.log(`Managed release ${version}\nExtension ID: ${id}\nGoogle Admin custom update URL: ${release.updateUrl}\nPublic files: ${site}\nPrivate signing key kept outside the public output. Back it up securely.`);
