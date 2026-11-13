@@ -4,6 +4,7 @@ import { BackendClient, type ConnectionSettings } from './transport.js';
 import { errorText } from './workspace.js';
 
 export const DISCOVERY_ENABLED = 'discoveryEnabled';
+export const DISCOVERY_PREFERENCES_VERSION = 'discoveryPreferencesVersion';
 export const DISCOVERY_PUBLISHED = 'discoveryPublished';
 interface Published { backendUrl: string; deviceId: string; key: string | null }
 
@@ -11,9 +12,13 @@ interface Published { backendUrl: string; deviceId: string; key: string | null }
 export class ProfileDiscovery {
   constructor(private readonly api: typeof chrome) {}
   async setEnabled(enabled: boolean): Promise<void> {
-    await this.api.storage.local.set({ [DISCOVERY_ENABLED]: enabled });
+    await this.api.storage.local.set({ [DISCOVERY_ENABLED]: enabled, [DISCOVERY_PREFERENCES_VERSION]: 1 });
   }
   async sync(config: ConnectionSettings | undefined): Promise<DiscoveryState> {
+    const version = (await this.api.storage.local.get(DISCOVERY_PREFERENCES_VERSION))[DISCOVERY_PREFERENCES_VERSION];
+    // Version 1 migrates both legacy opt-in states to automatic discovery once.
+    // Future opt-outs write the marker with the preference and remain authoritative.
+    if (typeof version !== 'number' || version < 1) await this.setEnabled(true);
     const enabled = (await this.api.storage.local.get(DISCOVERY_ENABLED))[DISCOVERY_ENABLED] === true;
     const state: DiscoveryState = { enabled, available: false, suggestions: [], requests: [] };
     if (!config) return state;

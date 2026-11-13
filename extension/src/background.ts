@@ -3,7 +3,7 @@ import { deviceNameSchema, normalizeBackendUrl, publicCommandSchema, type Creden
 import type { UiRequest, UiResponse, UiState } from '../../shared/ui.js';
 import { ApiError, BackendClient, RealtimeTransport, type ConnectionSettings } from './transport.js';
 import { captureWorkspace, errorText, WorkspaceReceiver } from './workspace.js';
-import { ProfileDiscovery, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED } from './discovery.js';
+import { ProfileDiscovery, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED, DISCOVERY_PREFERENCES_VERSION } from './discovery.js';
 import { isManagedRelease, parseManagedPolicy, type ManagedPolicy } from './managed.js';
 interface Configuration extends ConnectionSettings { name: string }
 type Status = Omit<UiState, 'configured' | 'backendUrl' | 'deviceId' | 'name' | 'lastReceived'>;
@@ -205,7 +205,7 @@ export class BackgroundController {
       case 'pairing.accept':
       case 'pairing.decline': {
         const discovery = await this.discovery.sync(await this.configuration());
-        if (discovery.error || !discovery.enabled || !discovery.available) throw new Error(discovery.error ?? 'Enable suggestions with a signed-in Chrome profile, or use a pairing code.');
+        if (discovery.error || !discovery.enabled || !discovery.available) throw new Error(discovery.error ?? 'Sign in to your Chrome profile and allow automatic suggestions in Advanced settings, or use a pairing code.');
         const client = await this.client();
         if (request.action === 'pairing.request') {
           const destinationId = z.string().uuid().parse(request.destinationId);
@@ -244,7 +244,7 @@ export class BackgroundController {
           try { await new BackendClient(existing.backendUrl, existing.credentials).request('/api/device', 'DELETE'); }
           catch (error) { if (!(error instanceof ApiError) || error.status !== 401) throw error; }
         }
-        this.transport.stop(); await this.api.storage.local.remove([CONFIG, STATUS, OUTBOUND, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED]); return { ok: true, state: await this.state(false) };
+        this.transport.stop(); await this.api.storage.local.remove([CONFIG, STATUS, OUTBOUND, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED, DISCOVERY_PREFERENCES_VERSION]); return { ok: true, state: await this.state(false) };
       }
       default: throw new Error('Unknown extension request');
     }

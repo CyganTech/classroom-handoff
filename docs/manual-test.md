@@ -58,11 +58,19 @@ The automated suite covers validation, authorization, actual HTTP/WebSocket/SQLi
 
 ## H — ChromeOS profile discovery and Easy pair
 
-1. On two actual Chrome/ChromeOS profiles with the extension, use the same primary Chrome account and server. Record ChromeOS/Chrome versions and whether installation is managed. Confirm suggestions start **off**, and manual pairing still works before opting in.
-2. Remove the manual peer link. Enable **Suggest my other browsers** on both. Confirm the browser names appear as online suggestions without any extension login or OAuth flow. A Google account signed in only on a website must not substitute for the primary Chrome profile account.
+1. On two actual Chrome/ChromeOS profiles with the extension, use the same primary Chrome account and server. Record ChromeOS/Chrome versions and whether installation is managed. Confirm suggestions appear automatically without opening Advanced settings, and manual pairing still works.
+2. Remove the manual peer link. Without changing any settings, confirm the browser names appear as online suggestions without any extension login or OAuth flow. A Google account signed in only on a website must not substitute for the primary Chrome profile account.
 3. Click **Easy pair** on A. Verify it remains unpaired and cannot send. Open B's popup; verify A's name, expiry and **Accept**/**Decline**. Decline and confirm the request disappears on both after polling. Request again, accept on B, and send an actual handoff.
 4. Repeat with different primary accounts and different server origins: neither should suggest the other. Sign out or use a guest profile; manual codes must still work. Close/sleep B and verify it is no longer suggested once presence expires.
 5. Request pairing and wait five minutes: no acceptance after expiry. Request again and change the profile account or turn suggestions off before accepting: pending requests must clear after synchronization. Previously approved pairings must remain until explicitly removed.
-6. Restart the backend and browser worker. Confirm opt-in/pairings survive and pending requests retain their original expiry. Disconnect a browser and confirm its discovery membership and requests are removed.
+6. Restart the backend and browser worker. Confirm discovery preferences/pairings survive and pending requests retain their original expiry. Disconnect a browser and confirm its discovery membership and requests are removed.
 7. Inspect discovery HTTP bodies and the database in a disposable test environment: only a 64-character matching key is published, never email or raw account ID. Different backend origins must yield different keys for the same account. Avoid copying live account metadata into reports.
 8. Verify the new identity permissions on a force-installed, enrolled Chromebook through Google Admin. Browser automation uses controlled identity data and does not establish native ChromeOS account availability or managed permission behavior.
+
+
+## I — Automatic suggestions upgrade and advanced opt-out
+
+1. Upgrade two existing 0.2.1 installations to 0.2.2, with suggestions previously off on one and on for the other. Confirm matching online browsers appear automatically with their existing registration IDs and peer links preserved.
+2. Confirm **Advanced settings** starts collapsed and the main Suggested browsers section has no checkbox. Expand Advanced settings and turn **Suggest browsers automatically** off. Pending requests and membership must clear after synchronization; established pairings and manual codes must keep working.
+3. Reload setup, stop/restart the worker, and restart Chrome. The advanced opt-out must remain off. Re-enable it and confirm suggestions return. Future extension updates must preserve this post-migration choice.
+4. Repeat with a new installation, a missing primary Chrome account, a different primary account, and an unreachable backend. New profiles discover automatically when eligible; unavailable discovery must still offer manual codes and must never pair without receiver approval.

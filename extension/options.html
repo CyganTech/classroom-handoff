@@ -28,13 +28,16 @@
           <form id="rename-form" class="inline-form"><div class="grow"><label for="device-name">Browser name</label><input id="device-name" type="text" maxlength="64" autocomplete="off" required></div><button class="secondary-button" type="submit">Save name</button></form>
           <dl class="device-details"><div><dt>Server</dt><dd id="backend-display"></dd></div><div><dt>Device ID</dt><dd id="device-id"></dd></div></dl>
           <p class="field-help">Keep this browser open and your computer awake to receive handoffs automatically.</p>
+          <details id="advanced-settings" class="advanced-settings"><summary>Advanced settings</summary>
+            <label class="toggle-label" for="discovery-enabled"><input id="discovery-enabled" type="checkbox" aria-describedby="discovery-setting-help">Suggest browsers automatically</label>
+            <p id="discovery-setting-help" class="field-help">Find your other browsers using the same primary Chrome account and Handoff server. Turning this off removes suggestions and pending pairing requests; existing pairings remain.</p>
+          </details>
         </section>
         <section id="pair-browser" class="card pairing-card">
           <div class="section-heading"><span class="step-number" aria-hidden="true">2</span><div><h2>Pair another browser</h2><p>Both browsers must use the same handoff server. Pair only browsers you trust to send and receive your tab links.</p></div></div>
           <div class="discovery-panel">
             <h3>Suggested browsers</h3>
-            <label class="toggle-label" for="discovery-enabled"><input id="discovery-enabled" type="checkbox" aria-describedby="discovery-privacy">Suggest my other browsers</label>
-            <p id="discovery-privacy" class="field-help">Optional: share a matching key derived from your Chrome profile account with this Handoff server. Your email stays in this browser. Enable this on both browsers; no extension sign-in is needed.</p>
+            <p id="discovery-privacy" class="field-help">Other online browsers using the same primary Chrome account and Handoff server appear automatically. A matching key is shared with this server; your email stays in this browser. No extension sign-in is needed.</p>
             <p id="discovery-status" class="field-help" role="status" aria-live="polite"></p>
             <ul id="pairing-requests" class="pairing-request-list" aria-label="Pairing requests" hidden></ul>
             <ul id="suggestions" class="peer-list" aria-label="Suggested browsers"></ul>

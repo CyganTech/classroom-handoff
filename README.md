@@ -31,15 +31,17 @@ For development without Docker, use `npm run dev` instead. Defaults are `127.0.0
 
 For two physical devices use a reachable **HTTPS** backend URL. `localhost` on each device refers to that device, so it cannot connect two computers. Do not expose the development HTTP port on the LAN. Pairing is independent of the extension ID, so separately loaded installations work.
 
-## Optional suggested browsers and Easy pair
+## Automatic suggested browsers and Easy pair
 
-In Device setup, turn on **Suggest my other browsers** on both installations. They must use the same Handoff server and the same primary signed-in Chrome profile account; a Google account signed into a website alone does not qualify. ChromeOS primary-profile support must be validated on actual enrolled devices. Discovery starts off and never asks you to sign in to the extension or grant Google OAuth access.
+Open Device setup to see **Suggested browsers** automatically. Both installations must use the same Handoff server and the same primary signed-in Chrome profile account; a Google account signed into a website alone does not qualify. No extension login or Google OAuth flow is needed. ChromeOS primary-profile support must be validated on actual enrolled devices. To turn suggestions off, expand **Advanced settings** under **This browser** and uncheck **Suggest browsers automatically**.
 
 An online, unpaired installation appears under **Suggested browsers**. Click **Easy pair**, then open Handoff on the other browser and choose **Accept** or **Decline**. Requests expire after five minutes; sending a request alone grants no access. Once accepted, pairing behaves exactly like code pairing. If no account is available, permissions are denied, or suggestions cannot reach the server, use a code.
 
+Version 0.2.2 enables suggestions once for new and existing installations, including browsers that had suggestions disabled in 0.2.1. An off choice made afterward is preserved across restarts and later updates.
+
 The extension needs Chrome's `identity` and `identity.email` permissions to read primary-profile information when suggestions are enabled. It sends a SHA-256 matching key derived from the stable account ID and backend origin. The email stays local and is never included in discovery requests. The key is persistent, pseudonymous account metadata visible to the server operator; it is a discovery hint, not verified Google authentication. Approve only a browser you recognize. Turning suggestions off, changing the profile account, or disconnecting clears membership and pending requests when the extension next reaches the server. Existing peer links remain until removed explicitly. Identity is rechecked at startup, sign-in changes, recovery alarms and UI polling; sleeping/offline browsers cannot publish a change immediately.
 
-Deploy the updated backend **before** distributing this extension. Additive SQLite tables preserve registrations and peers; old extensions continue using their existing handoff protocol. The checked-in signed release/site is a separate distribution: pushing this source branch does not publish a new managed CRX or deploy a backend. An eventual managed release must use a newer version and the existing signing key, and its added identity permissions need validation through Google Admin.
+The discovery backend introduced with 0.2.1 is required; the automatic-suggestions update in 0.2.2 requires no additional backend update. Additive SQLite tables preserve registrations and peers; old extensions continue using their existing handoff protocol. Managed updates use the signed package and update feed linked above. Publishing source alone does not deploy a backend. Releases retain the existing signing key and extension ID; identity permission behavior still needs validation through Google Admin.
 
 ## Demonstrate a handoff
 

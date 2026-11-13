@@ -81,16 +81,28 @@ try {
   const senderId = paired.deviceId;
   console.log('PASS A: real registration, single-use pairing and online presence');
   await a.options.screenshot({ path: join(evidence, 'setup-paired.png'), fullPage: true });
-  assert.equal((await state(a.options)).discovery?.enabled, false);
+  assert.equal((await state(a.options)).discovery?.enabled, true);
+  assert.equal(await a.options.locator('#advanced-settings').getAttribute('open'), null, 'advanced controls start collapsed');
+  assert.equal(await a.options.locator('#discovery-enabled').isVisible(), false);
   await a.options.bringToFront();
   await a.options.locator('#copy-code').click();
   await until(() => a.options.locator('#message').innerText(), text => text.includes('Code copied'), 'copy feedback');
   // Copy feedback follows a successful real clipboard write; clipboard reads need
   // a separate permission that the production extension deliberately does not use.
   await request(a.options, { action: 'peer.remove', deviceId: destinationId });
-  await a.options.locator('#discovery-enabled').check();
-  await b.options.locator('#discovery-enabled').check();
   await until(() => a.options.getByRole('button', { name: 'Easy pair with Classroom display' }).isVisible(), Boolean, 'same-profile suggestion');
+  await a.options.locator('#suggestions').screenshot({ path: join(evidence, 'automatic-suggestions.png') });
+  // Suggestions must appear before touching any settings. Verify the advanced off
+  // switch removes discovery and survives a page reload, then re-enable for pairing.
+  await a.options.locator('#advanced-settings summary').click();
+  await a.options.locator('#discovery-enabled').uncheck();
+  await until(() => state(a.options), value => value.discovery?.enabled === false, 'advanced opt-out');
+  await a.options.reload();
+  await until(() => state(a.options), value => value.discovery?.enabled === false && value.discovery.suggestions.length === 0, 'opt-out survives reload');
+  await a.options.locator('#advanced-settings summary').click();
+  await a.options.locator('#discovery-enabled').check();
+  await until(() => a.options.getByRole('button', { name: 'Easy pair with Classroom display' }).isVisible(), Boolean, 're-enabled suggestions');
+  await a.options.locator('#advanced-settings summary').click();
   await a.options.getByRole('button', { name: 'Easy pair with Classroom display' }).click();
   await until(() => state(b.options), value => (value.discovery?.requests.length ?? 0) === 1, 'incoming Easy pair request');
   assert.equal((await state(a.options)).devices.length, 0, 'request alone does not grant handoff rights');
@@ -113,10 +125,12 @@ try {
   const setupShortcut = await until(async () => b.context.pages().find(p => p.url().endsWith('/options.html#pair-browser')), Boolean, 'popup pairing shortcut');
   assert.ok(setupShortcut); await setupShortcut.close();
   await approval.close();
+  await a.options.locator('#advanced-settings summary').click();
+  await b.options.locator('#advanced-settings summary').click();
   await a.options.locator('#discovery-enabled').uncheck();
   await b.options.locator('#discovery-enabled').uncheck();
   assert.equal((await state(a.options)).devices.length, 1, 'disabling discovery preserves established pairing');
-  console.log('PASS: short-code copy, opt-in suggestions, decline, popup approval, mobile setup, and pairing shortcut');
+  console.log('PASS: short-code copy, automatic suggestions, persistent advanced opt-out, decline, popup approval, mobile setup, and pairing shortcut');
   const unrelated = await b.context.newPage(); await unrelated.goto(`${lessonOrigin}/unrelated`);
   await b.options.close(); // Receiving needs no open extension UI.
   const urls = Array.from({ length: 5 }, (_, i) => `${lessonOrigin}/lesson-${i + 1}`);

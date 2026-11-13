@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createApp } from '../server/app.js';
 import { ProfileDiscovery } from '../extension/src/discovery.js';
 
-test('profile discovery is opt-in, scopes account hashes to the backend, and keeps email local', async t => {
+test('automatic profile discovery scopes account hashes to the backend and keeps email local', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'discovery-'));
   const app = createApp({ dataDir: dir }); const address = await app.listen(0);
   t.after(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
@@ -21,9 +21,8 @@ test('profile discovery is opt-in, scopes account hashes to the backend, and kee
     if (unavailable) throw new Error('Not available'); return profile;
   } } } as unknown as typeof chrome;
   const discovery = new ProfileDiscovery(api);
-  assert.equal((await discovery.sync(config)).enabled, false);
-  assert.equal(identityCalls, 0); assert.equal(app.store.discoveryKey(config.credentials.deviceId), undefined);
-  await discovery.setEnabled(true);
+  assert.equal((await discovery.sync(config)).enabled, true);
+  assert.equal(identityCalls, 1); assert.ok(app.store.discoveryKey(config.credentials.deviceId));
   const enabled = await discovery.sync(config);
   assert.equal(enabled.email, profile.email); assert.equal(enabled.available, true);
   const key = app.store.discoveryKey(config.credentials.deviceId)!;
@@ -117,4 +116,57 @@ test('uncertain first publication is cleared after opt-out or identity loss', as
   assert.ok((await discovery.sync(config)).error);
   await discovery.sync(config);
   assert.equal(app.store.discoveryKey(config.credentials.deviceId), undefined, 'uncertain clearing is retried');
+});
+
+
+for (const previous of [undefined, false, true]) {
+  test(`discovery automatically enables and migrates legacy preference ${previous}`, async () => {
+    const values: Record<string, unknown> = previous === undefined ? {} : { discoveryEnabled: previous };
+    const writes: Record<string, unknown>[] = [];
+    const api = { storage: { local: {
+      get: async (key: string) => ({ [key]: values[key] }),
+      set: async (patch: Record<string, unknown>) => { writes.push(structuredClone(patch)); Object.assign(values, patch); }
+    } } } as unknown as typeof chrome;
+    const discovery = new ProfileDiscovery(api);
+    assert.equal((await discovery.sync(undefined)).enabled, true);
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0], { discoveryEnabled: true, discoveryPreferencesVersion: 1 });
+    assert.equal((await new ProfileDiscovery(api).sync(undefined)).enabled, true);
+    assert.equal(writes.length, 1, 'migration is performed once');
+    await discovery.setEnabled(false);
+    assert.deepEqual(writes[1], { discoveryEnabled: false, discoveryPreferencesVersion: 1 });
+    for (let restart = 0; restart < 3; restart++) assert.equal((await new ProfileDiscovery(api).sync(undefined)).enabled, false);
+    assert.equal(writes.length, 2, 'later restarts preserve an explicit opt-out');
+    await discovery.setEnabled(true);
+    assert.equal((await new ProfileDiscovery(api).sync(undefined)).enabled, true);
+  });
+}
+
+test('an explicit opt-out before first sync completes migration without re-enabling', async () => {
+  const values: Record<string, unknown> = {};
+  const api = { storage: { local: { get: async (key: string) => ({ [key]: values[key] }), set: async (patch: Record<string, unknown>) => { Object.assign(values, patch); } } } } as unknown as typeof chrome;
+  await new ProfileDiscovery(api).setEnabled(false);
+  assert.equal((await new ProfileDiscovery(api).sync(undefined)).enabled, false);
+  assert.equal(values.discoveryPreferencesVersion, 1);
+});
+
+test('advanced opt-out clears pending requests and preserves already paired browsers', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'discovery-optout-')); const app = createApp({ dataDir: dir }); const address = await app.listen(0);
+  t.after(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
+  const credentials = app.store.register('A'); const config = { backendUrl: address.url, credentials };
+  const values: Record<string, unknown> = {};
+  const api = { storage: { local: { get: async (key: string) => ({ [key]: values[key] }), set: async (patch: Record<string, unknown>) => { Object.assign(values, patch); } } }, identity: { getProfileUserInfo: async () => ({ id: 'account', email: 'teacher@example.org' }) } } as unknown as typeof chrome;
+  const discovery = new ProfileDiscovery(api); await discovery.sync(config);
+  const key = app.store.discoveryKey(credentials.deviceId)!; assert.ok(key);
+  const peer = app.store.register('Paired'); const pending = app.store.register('Pending');
+  app.store.setDiscovery(peer.deviceId, key); app.store.setDiscovery(pending.deviceId, key);
+  const first = app.store.requestPairing(credentials.deviceId, peer.deviceId, Date.now() + 300000, Date.now());
+  app.store.resolvePairing(first.id, peer.deviceId, true, Date.now());
+  const request = app.store.requestPairing(pending.deviceId, credentials.deviceId, Date.now() + 300000, Date.now());
+  await discovery.setEnabled(false); await discovery.sync(config);
+  assert.equal(app.store.discoveryKey(credentials.deviceId), undefined);
+  assert.equal(app.store.getPairingRequest(request.id), undefined);
+  assert.equal(app.store.arePeers(credentials.deviceId, peer.deviceId), true);
+  await new ProfileDiscovery(api).sync(config);
+  assert.equal(app.store.discoveryKey(credentials.deviceId), undefined);
 });

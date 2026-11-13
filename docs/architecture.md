@@ -20,7 +20,7 @@ sequenceDiagram
 ## Components
 
 - `shared/protocol.ts`: strict Zod workspace/message schemas and wire types. `shared/ui.ts` defines popup/worker actions without exposing tokens to UI responses.
-- `server/store.ts`: synchronous prepared SQLite statements for device credential hashes, direct peer edges, single-use pairing codes, opt-in discovery membership, expiring pairing requests and command state. WAL, foreign keys and a unique pending-destination index enforce local consistency.
+- `server/store.ts`: synchronous prepared SQLite statements for device credential hashes, direct peer edges, single-use pairing codes, discovery membership, expiring pairing requests and command state. WAL, foreign keys and a unique pending-destination index enforce local consistency.
 - `server/app.ts`: HTTP registration/pairing/handoff/status, authenticated WebSocket delivery, presence, acknowledgements, rate limits, expiry, payload bounds and graceful shutdown. `server/config.ts` owns environment settings.
 - `extension/src/background.ts`: trusted extension message boundary, persistent configuration/preferences/status and idempotent outbound retry. UI requests are serialized, status updates use a separate serialized queue.
 - `extension/src/transport.ts`: REST with deadlines and no credentials in URLs, first-frame socket authentication, schema checks, 20-second application heartbeat and exponential reconnect with jitter.
@@ -37,18 +37,18 @@ HTTPS/WSS is required for non-loopback deployments. Caddy terminates TLS and for
 
 ## Optional profile discovery and approved pairing
 
-Discovery is off initially. With explicit opt-in, `chrome.identity.getProfileUserInfo({ accountStatus: "ANY" })` reads the primary Chrome profile without OAuth. The extension hashes a versioned tuple of backend origin and stable account ID using SHA-256. Email is used only in local setup text. The account key is persistent pseudonymous metadata, not anonymous data or server-verifiable proof of Google ownership; the server continues to trust only device bearer credentials and explicit receiver approval.
+Discovery is automatic by default in 0.2.2. A versioned local preference migration writes `discoveryEnabled: true` and `discoveryPreferencesVersion: 1` together once for new and legacy installations, including legacy false preferences. Subsequent explicit changes write the marker with the preference; a later restart or update preserves those choices. The off switch lives under collapsed Advanced settings. When enabled, `chrome.identity.getProfileUserInfo({ accountStatus: "ANY" })` reads the primary Chrome profile without OAuth. The extension hashes a versioned tuple of backend origin and stable account ID using SHA-256. Email is used only in local setup text. The account key is persistent pseudonymous metadata, not anonymous data or server-verifiable proof of Google ownership; the server continues to trust only device bearer credentials and explicit receiver approval.
 
 Authenticated APIs:
 
 - `PUT /api/discovery` accepts `{ accountKey: string | null }` (64 lowercase hexadecimal characters, or null to disable). Changing/removing a key transactionally deletes that device's pending pairing requests.
 - `GET /api/discovery` returns `{ suggestions: Device[], requests: PairingRequest[] }`. Suggestions are online, matching, unpaired peers only, without account keys. `GET /api/pairing-requests` lists the caller's unexpired requests.
-- `POST /api/pairing-requests` accepts `{ destinationId }`, validates opt-in matching and target presence, and creates or reuses a pending request for either direction of that pair.
+- `POST /api/pairing-requests` accepts `{ destinationId }`, validates enabled matching and target presence, and creates or reuses a pending request for either direction of that pair.
 - `POST /api/pairing-requests/:id/accept` or `/decline` requires the named receiver. Acceptance revalidates membership and expiry and atomically consumes the request and creates the same symmetric peer link as manual pairing. Duplicate acceptance fails; a request grants no handoff authorization.
 
 `PairingRequest` includes ID, public source/destination device metadata, and expiry. Requests share the manual code creation/claim rate buckets and five-minute configurable pairing lifetime. Database changes are additive; expiry and foreign-key cascades clean up expired requests and revoked devices. No discovery messages are added to the existing WebSocket protocol.
 
-The background worker rechecks identity at startup, sign-in change, recovery and UI polling; disabling discovery or a changed/missing account clears server membership on the next successful sync. Published membership is recorded locally so failed cleanup retries after reconnection. Discovery failures stay separate from handoff status and leave manual pairing usable. Previously approved pairings survive identity changes or discovery opt-out. Deploy the backend before the extension; no extension/managed-release publication is implied by source changes.
+The background worker rechecks identity at startup, sign-in change, recovery and UI polling; disabling discovery or a changed/missing account clears server membership on the next successful sync. Published membership is recorded locally so failed cleanup retries after reconnection. Discovery failures stay separate from handoff status and leave manual pairing usable. Previously approved pairings survive identity changes or discovery opt-out. Discovery requires the backend introduced with 0.2.1. Automatic suggestions in 0.2.2 change only the extension and need no further backend deployment; publishing source alone does not publish the managed update feed.
 
 ## MV3 lifecycle and recovery
 
@@ -70,7 +70,7 @@ Chrome APIs and storage are not one atomic transaction. The receive journal and 
 
 ## Data and operational limits
 
-Device names/IDs, hashed credentials, peer links, pairing-code hashes and command metadata are retained, plus account matching keys for opted-in discovery and short-lived pairing-request participants/expiry. Raw profile emails and account IDs are not sent to the backend. Pending payloads contain URLs, pinned/selection flags and group metadata; no page contents, cookies, passwords, screenshots or unsaved form state are read. The backend is trusted with pending URLs, including any query tokens already present in them. This POC is transport-encrypted, not end-to-end encrypted. URLs are removed from logical rows on terminal status and SQLite secure-delete/checkpoint truncates WAL; existing backups, proxy logs and OS snapshots require their own retention controls. Default server logging avoids URLs/tokens/pair codes.
+Device names/IDs, hashed credentials, peer links, pairing-code hashes and command metadata are retained, plus account matching keys for enabled discovery and short-lived pairing-request participants/expiry. Raw profile emails and account IDs are not sent to the backend. Pending payloads contain URLs, pinned/selection flags and group metadata; no page contents, cookies, passwords, screenshots or unsaved form state are read. The backend is trusted with pending URLs, including any query tokens already present in them. This POC is transport-encrypted, not end-to-end encrypted. URLs are removed from logical rows on terminal status and SQLite secure-delete/checkpoint truncates WAL; existing backups, proxy logs and OS snapshots require their own retention controls. Default server logging avoids URLs/tokens/pair codes.
 
 Use one backend process and a persistent local SQLite volume. Back up while stopped, restrict filesystem access, and protect the HTTPS endpoint. Registrations and peer links remain until revoked; expired pairing hashes and terminal command records are swept. No multi-replica coordination, organization isolation, database migration framework or production monitoring stack is implemented.
 

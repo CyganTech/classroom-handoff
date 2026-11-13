@@ -68,7 +68,7 @@ function renderDiscovery(next: UiState): void {
     void runAction(async () => { await requestUi(action); }, action.action === 'pairing.accept' ? 'Browsers paired. You can now send handoffs.' : 'Pairing request declined.');
   });
   const suggestions = (discovery?.suggestions ?? []).filter(device => !requests.some(r => r.source.id === device.id || r.destination.id === device.id));
-  showText(element('discovery-status'), discovery?.error ?? (!discovery?.enabled ? 'Suggestions are off. You can always use a code below.' : !discovery.available ? 'No primary Chrome account is available. Sign in to the browser profile, or use a code below.' : `Using ${discovery.email ?? 'your Chrome profile account'}. ${suggestions.length ? 'Choose a browser, then approve on that browser.' : requests.length ? 'Waiting for the requests below.' : 'No other browsers found. Enable suggestions on your other browser using the same Chrome account and Handoff server, and keep it awake.'}`));
+  showText(element('discovery-status'), discovery?.error ?? (!discovery?.enabled ? 'Automatic suggestions are off. Turn them on in Advanced settings, or use a code below.' : !discovery.available ? 'No primary Chrome account is available. Sign in to the browser profile, or use a code below.' : `Using ${discovery.email ?? 'your Chrome profile account'}. ${suggestions.length ? 'Choose a browser, then approve on that browser.' : requests.length ? 'Waiting for the requests below.' : 'No other browsers found. Open Handoff on your other browser using the same primary Chrome account and Handoff server, and keep it awake.'}`));
   const list = element('suggestions');
   const signature = JSON.stringify([suggestions, busy]);
   if (list.dataset.rendered === signature) return;
