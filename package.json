@@ -1,6 +1,6 @@
 {
   "name": "classroom-handoff",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "engines": {
@@ -19,7 +19,8 @@
     "test:built": "node scripts/smoke-built.mjs",
     "test:docker": "node scripts/docker-smoke.mjs",
     "release:managed": "node --import tsx scripts/managed-release.ts",
-    "test:managed-browser": "node --import tsx scripts/managed-browser-smoke.ts"
+    "test:managed-browser": "node --import tsx scripts/managed-browser-smoke.ts",
+    "test:analytics": "node --import tsx scripts/analytics-e2e.ts"
   },
   "dependencies": {
     "ws": "^8.18.3",

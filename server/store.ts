@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { AnalyticsStore, type AnalyticsOptions } from './analytics-store.js';
+import type { AnalyticsMetadata } from '../shared/analytics.js';
 import type { CommandStatus, Credentials, Device, PublicCommand, Workspace } from '../shared/protocol.js';
 
 interface DeviceRow { id: string; name: string; token_hash: string; last_seen: number | null }
@@ -22,7 +24,8 @@ export function generatePairingCode(): string {
 }
 export class Store {
   readonly db: DatabaseSync;
-  constructor(dataDir: string, private readonly pairingCode: () => string = generatePairingCode) {
+  readonly analytics: AnalyticsStore;
+  constructor(dataDir: string, private readonly pairingCode: () => string = generatePairingCode, analyticsOptions: AnalyticsOptions = { enabled: false, retentionDays: 180, now: Date.now }) {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(dataDir, 'handoff.sqlite'));
     chmodSync(join(dataDir, 'handoff.sqlite'), 0o600);
@@ -41,6 +44,7 @@ export class Store {
         payload TEXT, request_hash TEXT NOT NULL, UNIQUE(source_id,request_id));
       CREATE UNIQUE INDEX IF NOT EXISTS one_pending_destination ON commands(destination_id) WHERE status = 'pending';
       CREATE INDEX IF NOT EXISTS command_expiry ON commands(status,expires_at);`);
+    this.analytics = new AnalyticsStore(this.db, analyticsOptions);
   }
   register(name: string): Credentials {
     const deviceId = randomUUID(); const token = randomBytes(32).toString('base64url');
@@ -60,7 +64,7 @@ export class Store {
   }
   rename(id: string, name: string): void { this.db.prepare('UPDATE devices SET name=? WHERE id=?').run(name, id); }
   touch(id: string, now: number): void { this.db.prepare('UPDATE devices SET last_seen=? WHERE id=?').run(now, id); }
-  revoke(id: string): void { this.db.prepare('DELETE FROM devices WHERE id=?').run(id); this.purgeDisk(); }
+  revoke(id: string): void { this.analytics.removed(id); this.db.prepare('DELETE FROM devices WHERE id=?').run(id); this.purgeDisk(); }
   createPairing(id: string, expiresAt: number): string {
     // A collision must never steal another browser's active code.
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -113,7 +117,7 @@ export class Store {
       this.db.prepare('DELETE FROM pairing_requests WHERE id=?').run(id);
       if (accept) {
         const [a, b] = [row.source_id, receiver].sort();
-        this.db.prepare('INSERT OR IGNORE INTO peers(a,b) VALUES(?,?)').run(a!, b!);
+        if (this.db.prepare('INSERT OR IGNORE INTO peers(a,b) VALUES(?,?)').run(a!, b!).changes) this.analytics.paired(a!, b!, 'easy-pair', now);
       }
       this.db.exec('COMMIT'); return row;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -126,7 +130,7 @@ export class Store {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare('DELETE FROM pairings WHERE code_hash=?').run(digest(code));
-      this.db.prepare('INSERT OR IGNORE INTO peers(a,b) VALUES(?,?)').run(a!, b!);
+      if (this.db.prepare('INSERT OR IGNORE INTO peers(a,b) VALUES(?,?)').run(a!, b!).changes) this.analytics.paired(a!, b!, 'code', now);
       this.db.prepare('DELETE FROM pairing_requests WHERE (source_id=? AND destination_id=?) OR (source_id=? AND destination_id=?)').run(a!, b!, b!, a!);
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -142,18 +146,22 @@ export class Store {
   getCommand(id: string): CommandRow | undefined { return this.db.prepare('SELECT * FROM commands WHERE id=?').get(id) as unknown as CommandRow | undefined; }
   byRequest(source: string, requestId: string): CommandRow | undefined { return this.db.prepare('SELECT * FROM commands WHERE source_id=? AND request_id=?').get(source, requestId) as unknown as CommandRow | undefined; }
   pending(destination: string): CommandRow[] { return this.db.prepare("SELECT * FROM commands WHERE destination_id=? AND status='pending' ORDER BY created_at").all(destination) as unknown as CommandRow[]; }
-  createCommand(source: string, destination: string, requestId: string, workspace: Workspace, requestHash: string, now: number, expiresAt: number): CommandRow {
+  createCommand(source: string, destination: string, requestId: string, workspace: Workspace, requestHash: string, now: number, expiresAt: number, analytics?: AnalyticsMetadata): CommandRow {
     const id = randomUUID();
     this.db.prepare("INSERT INTO commands(id,request_id,source_id,destination_id,status,created_at,expires_at,payload,request_hash) VALUES(?,?,?,?,'pending',?,?,?,?)").run(id, requestId, source, destination, now, expiresAt, JSON.stringify(workspace), requestHash);
+    this.analytics.accepted(id, source, destination, workspace.tabs.length, now, analytics);
     return this.getCommand(id)!;
   }
   complete(id: string, status: Exclude<CommandStatus, 'pending'>, now: number, error: string | null, warnings: string[]): CommandRow | undefined {
-    this.db.prepare("UPDATE commands SET status=?,completed_at=?,error=?,warnings=?,payload=NULL WHERE id=? AND status='pending'").run(status, now, error, JSON.stringify(warnings), id);
+    const updated = this.db.prepare("UPDATE commands SET status=?,completed_at=?,error=?,warnings=?,payload=NULL WHERE id=? AND status='pending'").run(status, now, error, JSON.stringify(warnings), id);
+    if (updated.changes) this.analytics.terminal(id, status, now);
     this.purgeDisk(); return this.getCommand(id);
   }
   expire(now: number, retentionMs: number): CommandRow[] {
     const expired = this.db.prepare("SELECT * FROM commands WHERE status='pending' AND expires_at<=?").all(now) as unknown as CommandRow[];
     this.db.prepare("UPDATE commands SET status='expired',completed_at=?,error='Handoff expired before acknowledgement',payload=NULL WHERE status='pending' AND expires_at<=?").run(now, now);
+    for (const row of expired) this.analytics.terminal(row.id, 'expired', now);
+    this.analytics.purge(now);
     this.db.prepare('DELETE FROM pairings WHERE expires_at<=?').run(now);
     this.db.prepare('DELETE FROM pairing_requests WHERE expires_at<=?').run(now);
     const deleted = this.db.prepare("DELETE FROM commands WHERE status!='pending' AND completed_at<?").run(now - retentionMs);

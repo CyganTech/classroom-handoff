@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "extensionId": "jeclpkblaheplcmfibpagjocmpidmcop",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "updateUrl": "https://cygantech.github.io/classroom-handoff/updates.xml",
-  "crxUrl": "https://cygantech.github.io/classroom-handoff/classroom-handoff-0.2.3.crx",
-  "crxSha256": "9ccdd3d24ab02b0c7f68ed611edc1f6d1257b430bc1422e3bb40c41533ca326a",
-  "zipSha256": "97a5f8460a886ad9c31e8e8271611d5b2bfe66afeee24f4f5b79edb96d89f92a",
+  "crxUrl": "https://cygantech.github.io/classroom-handoff/classroom-handoff-0.2.4.crx",
+  "crxSha256": "ab5e374dc1bf9ed1ae24e0372b1da952cf09dad6cc17f6432f6820bb8b9413a9",
+  "zipSha256": "0f260927e3218ef90d74c343cfdb4e142a19d09c1d2643114594d0181eaba0f7",
   "publicKeySha256": "942bfa1b074fb2c581f069e2cf83c2ef91f461cd56923c7b1b827fbaf80b54ec",
   "backendPermission": "https://*/*",
   "backendPolicyRequired": true

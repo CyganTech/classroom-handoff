@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Analytics · Classroom Handoff</title>
+  <link rel="icon" href="/admin/assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+  <script src="/admin/assets/admin.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="brand"><img src="/admin/assets/logo.svg" width="44" height="44" alt=""><span>Classroom Handoff</span></div>
+    <span class="header-divider" aria-hidden="true"></span><h1>Analytics</h1>
+    <div class="header-actions"><label class="theme-label" for="theme">Theme</label><select id="theme" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select><button id="sign-out" hidden>Sign out</button></div>
+  </header>
+  <main id="main" tabindex="-1">
+    <section id="login" class="login panel" hidden aria-labelledby="login-title">
+      <img src="/admin/assets/logo.svg" width="48" height="48" alt="">
+      <h2 id="login-title">Sign in to analytics</h2><p>Enter the administrator key for this server.</p>
+      <form id="login-form"><label for="admin-key">Administrator key</label><input id="admin-key" type="password" autocomplete="off" required spellcheck="false" autocapitalize="off"><button class="primary" id="login-button" type="submit">Sign in</button></form>
+      <p id="login-error" class="error" role="alert"></p><p class="muted small">Your session stays in this browser for up to 8 hours.</p>
+    </section>
+    <div id="dashboard" hidden>
+      <form id="range-form" class="filters" aria-label="Analytics date range">
+        <label class="sr-only" for="range">Date range</label><select id="range"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="180">Last 180 days</option><option value="custom">Custom range</option></select>
+        <div id="custom-range" class="custom-range" hidden><label for="from">From</label><input id="from" type="date" required><label for="to">To</label><input id="to" type="date" required><button type="submit">Apply</button></div>
+        <span class="timezone">America/Chicago</span>
+        <div class="export-actions"><label class="sr-only" for="export-report">CSV report</label><select id="export-report"><option value="daily">Daily report</option><option value="browsers">Browser report</option></select><button id="export" class="primary" type="button" disabled>Export CSV</button></div>
+      </form>
+      <div id="status" class="status muted" role="status" aria-live="polite">Loading analytics…</div>
+      <div id="report-error" class="error-banner" role="alert" hidden><span id="report-error-message"></span> <button id="retry" type="button">Retry</button></div>
+      <div class="metrics">
+        <section class="panel metric"><h2>Handoffs</h2><p class="metric-value" id="handoffs">—</p><p class="muted small">Accepted by this server</p></section>
+        <section class="panel metric"><h2>Success rate</h2><p class="metric-value" id="success-rate">—</p><p class="muted small">Applied ÷ (applied + failed + expired)</p></section>
+        <section class="panel metric"><h2>Active browsers</h2><p class="metric-value" id="active-browsers">—</p><p class="muted small">Browser installations, not unique people</p></section>
+        <section class="panel metric"><h2>Median confirmation</h2><p class="metric-value" id="median">—</p><p class="muted small">Receiver confirmation; website load time excluded. <span id="p95">95th percentile: —</span></p></section>
+      </div>
+      <div class="trend-grid">
+        <section class="panel trend"><h2>Daily handoffs</h2><p id="empty-trend" class="empty" hidden>No handoffs in this date range.</p><div class="chart-wrap"><canvas id="daily-chart" role="img" aria-label="Daily handoffs. Exact values are available in the daily data table below."></canvas></div><details class="daily-details"><summary>View daily data</summary><div class="table-scroll" tabindex="0" role="region" aria-label="Daily handoff data"><table><thead><tr><th scope="col">Date</th><th scope="col">Handoffs</th><th scope="col">Applied</th><th scope="col">Failed</th><th scope="col">Expired</th><th scope="col">Pending</th><th scope="col">Tabs</th></tr></thead><tbody id="daily-rows"></tbody></table></div></details></section>
+        <section class="panel outcomes" aria-labelledby="outcomes-title"><h2 id="outcomes-title">Outcomes</h2><dl><div><dt>Applied</dt><dd id="applied">—</dd></div><div><dt>Failed</dt><dd id="failed">—</dd></div><div><dt>Expired</dt><dd id="expired">—</dd></div><div><dt>Pending</dt><dd id="pending">—</dd></div></dl></section>
+      </div>
+      <div class="breakdown-grid"><section class="panel breakdown"><h2>Send mode</h2><div id="modes"></div></section><section class="panel breakdown"><h2>Pairing method</h2><div id="pairings"></div><p class="muted small">New pairings in the selected range</p></section></div>
+      <section class="panel diagnostics" aria-label="Tabs and request failures"><dl><div><dt>Tabs sent</dt><dd id="tabs">—</dd></div><div><dt>Capture failures</dt><dd id="capture-failures">—</dd></div><div><dt>Send failures</dt><dd id="send-failures">—</dd></div><div><dt>Rejected requests</dt><dd id="rejected">—</dd></div></dl><p class="muted small">Capture, send, and rejected-request counts are separate from handoff outcomes.</p></section>
+      <section class="panel browsers" aria-labelledby="browsers-title"><div class="table-heading"><h2 id="browsers-title">Browsers</h2><label class="sr-only" for="browser-search">Find a browser</label><input id="browser-search" maxlength="200" type="search" placeholder="Find a browser" autocomplete="off"></div><div class="table-scroll" tabindex="0" role="region" aria-label="Browser activity table"><table><thead><tr><th scope="col">Browser</th><th scope="col">Platform / version</th><th scope="col">Sent</th><th scope="col">Received</th><th scope="col">Applied</th><th scope="col">Failed / expired</th><th scope="col">Pending</th><th scope="col">Last activity in range</th></tr></thead><tbody id="browser-rows"></tbody></table></div><div class="pagination"><span id="browser-count" role="status"></span><div><button id="previous" type="button">Previous</button><button id="next" type="button">Next</button></div></div></section>
+      <footer class="muted small"><p id="retention-note">180-day retention · Browser installations, not unique people</p><p id="collection-status"></p></footer>
+    </div>
+    <p id="initial-status" class="initial-status muted" role="status">Checking your session…</p>
+  </main>
+</body>
+</html>

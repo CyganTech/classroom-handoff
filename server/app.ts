@@ -4,6 +4,8 @@ import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { z } from 'zod';
 import { ackSchema, deviceNameSchema, handoffSchema, MAX_MESSAGE_BYTES, type PairingRequest, type ServerMessage } from '../shared/protocol.js';
 import { readConfig, type AppConfig } from './config.js';
+import { AdminRouter } from './admin-router.js';
+import { clientInfoSchema, clientEventSchema } from '../shared/analytics.js';
 import { Store, digest, publicCommand, type PairingRequestRow, type CommandRow } from './store.js';
 
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
@@ -17,7 +19,7 @@ interface Connection { socket: WebSocket; lastSeen: number; lastPing: number }
 
 export function createApp(overrides: Partial<AppConfig> = {}) {
   const config = { ...readConfig(), ...overrides };
-  const store = new Store(config.dataDir);
+  const store = new Store(config.dataDir, undefined, { enabled: config.analyticsEnabled, retentionDays: config.analyticsRetentionDays, now: config.now });
   const connections = new Map<string, Connection>();
   const rateLimits = new Map<string, { count: number; until: number }>();
   const unauthenticated = new Set<WebSocket>();
@@ -85,10 +87,12 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     }
     try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown; } catch { throw new HttpError(400, 'Request body must contain valid JSON'); }
   }
+  const admin = new AdminRouter(config, store.analytics, { json, body, rate, fail: (status, message) => { throw new HttpError(status, message); } });
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url || '/', 'http://localhost');
       const path = url.pathname; const method = req.method;
+      if (await admin.handle(req, res, url)) return;
       if (url.search) throw new HttpError(400, 'Query parameters are not supported');
       if ((path === '/healthz' || path === '/health') && method === 'GET') { json(res, 200, { ok: true }); return; }
       const ip = req.socket.remoteAddress || 'unknown';
@@ -102,6 +106,14 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       if (!caller) throw new HttpError(401, 'Valid device credentials are required');
       rate(`api:${caller.id}`, config.requestLimit);
       sweep();
+      if (path === '/api/analytics/capabilities' && method === 'GET') { json(res, 200, { enabled: config.analyticsEnabled, version: 1 }); return; }
+      if (path === '/api/analytics/client' && method === 'POST') {
+        const info = clientInfoSchema.parse(await body(req)); store.analytics.client(caller.id, info, config.now()); json(res, 200, {}); return;
+      }
+      if (path === '/api/analytics/events' && method === 'POST') {
+        const { events } = z.object({ events: z.array(clientEventSchema).max(100) }).strict().parse(await body(req));
+        store.analytics.events(caller.id, events, config.now()); json(res, 200, {}); return;
+      }
       if (path === '/api/discovery' && method === 'PUT') {
         const { accountKey } = discoverySchema.parse(await body(req));
         store.setDiscovery(caller.id, accountKey); json(res, 200, {}); return;
@@ -170,15 +182,17 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       }
       if (path === '/api/handoffs' && method === 'POST') {
         const request = handoffSchema.parse(await body(req));
-        const requestHash = digest(JSON.stringify(request));
+        const { analytics, ...core } = request;
+        const requestHash = digest(JSON.stringify(core));
         const existing = store.byRequest(caller.id, request.requestId);
         if (existing) {
           if (existing.request_hash !== requestHash) throw new HttpError(409, 'This request ID was already used with different contents');
           json(res, 200, { command: publicCommand(existing) }); return;
         }
-        if (!store.arePeers(caller.id, request.destinationId)) throw new HttpError(403, 'Destination device is not paired');
-        if (!online(request.destinationId)) throw new HttpError(409, 'Destination device is offline. Reconnect it and try again.');
-        if (store.pending(request.destinationId).length) throw new HttpError(409, 'A handoff to this destination is still pending');
+        const reject = (reason: 'offline' | 'unpaired' | 'busy' | 'size', status: number, message: string): never => { store.analytics.rejected(caller.id, request.requestId, reason, config.now()); throw new HttpError(status, message); };
+        if (!store.arePeers(caller.id, request.destinationId)) reject('unpaired', 403, 'Destination device is not paired');
+        if (!online(request.destinationId)) reject('offline', 409, 'Destination device is offline. Reconnect it and try again.');
+        if (store.pending(request.destinationId).length) reject('busy', 409, 'A handoff to this destination is still pending');
         const now = config.now();
         // Delivery adds metadata to the submitted workspace. Check the complete envelope so
         // every accepted command fits the receiver's independently enforced message bound.
@@ -188,8 +202,8 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
           destinationId: request.destinationId, status: 'pending', createdAt: now, expiresAt: now + config.commandTtlMs,
           completedAt: null, error: null, warnings: [], sourceName: '\0'.repeat(64), workspace: request.workspace
         } };
-        if (Buffer.byteLength(JSON.stringify(envelope)) > MAX_MESSAGE_BYTES) throw new HttpError(413, 'Workspace is too large to deliver. Close some tabs and try again.');
-        const command = store.createCommand(caller.id, request.destinationId, request.requestId, request.workspace, requestHash, now, now + config.commandTtlMs);
+        if (Buffer.byteLength(JSON.stringify(envelope)) > MAX_MESSAGE_BYTES) reject('size', 413, 'Workspace is too large to deliver. Close some tabs and try again.');
+        const command = store.createCommand(caller.id, request.destinationId, request.requestId, request.workspace, requestHash, now, now + config.commandTtlMs, analytics);
         deliver(command); json(res, 201, { command: publicCommand(command) }); return;
       }
       const commandMatch = /^\/api\/handoffs\/([a-f0-9-]{36})$/.exec(path);

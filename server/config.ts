@@ -19,6 +19,7 @@ export interface AppConfig {
   pairingCreationLimit: number;
   requestLimit: number;
   maxConnections: number;
+  analyticsAdminKey: string; analyticsEnabled: boolean; analyticsRetentionDays: number;
   now: () => number;
 }
 function numeric(env: NodeJS.ProcessEnv, key: string, fallback: number, min = 1, max = Number.MAX_SAFE_INTEGER): number {
@@ -29,7 +30,11 @@ function numeric(env: NodeJS.ProcessEnv, key: string, fallback: number, min = 1,
   return value;
 }
 export function readConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const analyticsAdminKey = env.ANALYTICS_ADMIN_KEY ?? '';
+  if (analyticsAdminKey && (analyticsAdminKey.length < 32 || analyticsAdminKey.length > 512)) throw new Error('ANALYTICS_ADMIN_KEY must contain 32–512 characters');
+  if (env.ANALYTICS_ENABLED && !['true', 'false'].includes(env.ANALYTICS_ENABLED)) throw new Error('ANALYTICS_ENABLED must be true or false');
   return {
+    analyticsAdminKey, analyticsEnabled: !!analyticsAdminKey && env.ANALYTICS_ENABLED !== 'false', analyticsRetentionDays: numeric(env, 'ANALYTICS_RETENTION_DAYS', 180, 1, 180),
     host: env.HOST || '127.0.0.1', port: numeric(env, 'PORT', 8787, 0, 65535),
     dataDir: resolve(env.DATA_DIR || '.data'), publicUrl: normalizeBackendUrl(env.PUBLIC_URL || 'http://localhost:8787'),
     pairingTtlMs: numeric(env, 'PAIRING_TTL_MS', 300_000), commandTtlMs: numeric(env, 'COMMAND_TTL_MS', 120_000),

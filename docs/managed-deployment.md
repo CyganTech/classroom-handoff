@@ -8,8 +8,8 @@ This deployment is a **Manifest V3 Chrome extension** installed as a managed ext
 - Installation/update hosting: https://cygantech.github.io/classroom-handoff/
 - Extension ID: `jeclpkblaheplcmfibpagjocmpidmcop`
 - Custom update URL: `https://cygantech.github.io/classroom-handoff/updates.xml`
-- Current version: **0.2.3**
-- Signed package: `site/classroom-handoff-0.2.3.crx`
+- Current version: **0.2.4**
+- Signed package: `site/classroom-handoff-0.2.4.crx`
 
 The public site contains installation files only. The Node/WebSocket backend must still run on a Docker host reachable over trusted HTTPS by both browsers. Use the existing production Compose instructions in README. No real backend address was supplied when preparing this release: set the eventual HTTPS backend origin in Google Admin policy below. No server, device token, or account is hardcoded.
 
@@ -105,3 +105,8 @@ If your environment requires store-hosted extensions, upload an appropriate ZIP 
 - [Chrome managed storage schema](https://developer.chrome.com/docs/extensions/reference/manifest/storage)
 - [Chromium: extension policy formats](https://www.chromium.org/administrators/configuring-policy-for-extensions/)
 - [Chrome self-hosted packaging/update protocol](https://developer.chrome.com/docs/extensions/how-to/distribute/host-on-linux)
+
+
+## Pilot analytics backend
+
+Extension 0.2.4 reports limited operational feature metadata only when its backend advertises analytics support. No user-facing notice or opt-in step is added for this informed internal pilot. The operator must update/configure the backend separately using [analytics.md](analytics.md); the administrator access key never belongs in Google Admin extension policy or the extension package.

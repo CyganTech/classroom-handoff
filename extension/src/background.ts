@@ -7,9 +7,11 @@ import { ProfileDiscovery, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED, DISCOVERY_PRE
 import { isManagedRelease, parseManagedPolicy, type ManagedPolicy } from './managed.js';
 import { defaultBrowserName, shouldMigrateName, type NameSource } from './naming.js';
 import { readPreferences, UI_PREFERENCES } from './preferences.js';
+import { AnalyticsClient } from './analytics.js';
+import type { AnalyticsMetadata } from '../../shared/analytics.js';
 interface Configuration extends ConnectionSettings { name: string; nameSource?: NameSource }
 type Status = Omit<UiState, 'configured' | 'backendUrl' | 'deviceId' | 'name' | 'lastReceived'>;
-interface Outbound { requestId: string; destinationId: string; workspace: Workspace; createdAt: number }
+interface Outbound { requestId: string; destinationId: string; workspace: Workspace; createdAt: number; analytics?: AnalyticsMetadata }
 const CONFIG = 'configuration'; const STATUS = 'uiStatus'; const OUTBOUND = 'outboundRequest'; const ALARM = 'handoff-recovery';
 const registrationSchema = z.object({ deviceId: z.string().uuid(), token: z.string().min(32).max(512) });
 
@@ -23,6 +25,7 @@ export class BackgroundController {
   private nameQueue: Promise<unknown> = Promise.resolve();
   private nameMigration?: Promise<void>;
   private nextNameMigration = 0;
+  private readonly analytics: AnalyticsClient;
   private readonly discovery: ProfileDiscovery;
   private readonly receiver: WorkspaceReceiver;
   private readonly transport: RealtimeTransport;
@@ -34,11 +37,12 @@ export class BackgroundController {
   private nextRegistrationAttempt = 0;
   private sending?: Promise<PublicCommand | undefined>;
   constructor(private readonly api: typeof chrome, private readonly now: () => number = Date.now) {
+    this.analytics = new AnalyticsClient(api, () => this.configuration(), now);
     this.discovery = new ProfileDiscovery(api);
     this.receiver = new WorkspaceReceiver(api);
     this.transport = new RealtimeTransport({
       settings: () => this.configuration(),
-      onConnected: async connected => { await this.updateStatus({ connected }); if (connected) { await this.updateStatus({ lastError: undefined }); await this.refreshDevices(); await this.retryOutbound().catch(() => undefined); await this.refreshCommand(); } },
+      onConnected: async connected => { await this.updateStatus({ connected }); if (connected) { this.analytics.kick(); await this.updateStatus({ lastError: undefined }); await this.refreshDevices(); await this.retryOutbound().catch(() => undefined); await this.refreshCommand(); } },
       onMessage: message => this.serverMessage(message),
       onError: error => this.updateStatus({ lastError: error })
     });
@@ -126,12 +130,12 @@ export class BackgroundController {
     return this.enqueueOperation(async () => {
       await Promise.all([this.api.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }), this.api.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })]);
       await this.api.alarms.create(ALARM, { periodInMinutes: 0.5 });
-      await this.applyManagedPolicy(); this.scheduleNameMigration(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected();
+      await this.applyManagedPolicy(); this.analytics.kick(); this.scheduleNameMigration(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected();
     });
   }
   recover(): Promise<void> {
     return this.enqueueOperation(async () => {
-      try { await this.applyManagedPolicy(); this.scheduleNameMigration(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected(); await this.retryOutbound(); await this.refreshCommand(); }
+      try { await this.applyManagedPolicy(); this.analytics.kick(); this.scheduleNameMigration(); await this.receiver.recover(); await this.discovery.sync(await this.configuration()); await this.transport.ensureConnected(); await this.retryOutbound(); await this.refreshCommand(); }
       catch (error) { await this.updateStatus({ lastError: errorText(error) }); }
     });
   }
@@ -192,14 +196,17 @@ export class BackgroundController {
   private async submitOutbound(): Promise<PublicCommand | undefined> {
     const outbound = (await this.api.storage.local.get(OUTBOUND))[OUTBOUND] as Outbound | undefined;
     if (!outbound) return;
-    if (Date.now() - outbound.createdAt > 60_000) { await this.api.storage.local.remove(OUTBOUND); await this.updateStatus({ lastError: 'The previous send could not be confirmed. Check the destination before sending again.' }); return; }
+    if (Date.now() - outbound.createdAt > 60_000) { this.analytics.record('send_failed', 'network', outbound.requestId); await this.api.storage.local.remove(OUTBOUND); await this.updateStatus({ lastError: 'The previous send could not be confirmed. Check the destination before sending again.' }); return; }
     try {
-      const { createdAt: _createdAt, ...request } = outbound;
+      const { createdAt: _createdAt, analytics: capturedAnalytics, ...core } = outbound;
+      const config = await this.configuration();
+      const supported = config && this.analytics.metadata(config, capturedAnalytics?.mode === 'current-tab');
+      const request = { ...core, ...(supported && capturedAnalytics ? { analytics: capturedAnalytics } : {}) };
       const result = await (await this.client()).request<{ command: PublicCommand }>('/api/handoffs', 'POST', request);
       const command = publicCommandSchema.parse(result.command);
       await this.recordCommand(command); await this.api.storage.local.remove(OUTBOUND); await this.updateStatus({ lastError: undefined }); return command;
     } catch (error) {
-      if (error instanceof ApiError) await this.api.storage.local.remove(OUTBOUND);
+      if (error instanceof ApiError) { this.analytics.record('send_failed', 'rejected', outbound.requestId); await this.api.storage.local.remove(OUTBOUND); }
       await this.updateStatus({ lastError: errorText(error) }); throw error;
     }
   }
@@ -279,8 +286,16 @@ export class BackgroundController {
         if (request.windowId !== undefined) z.number().int().nonnegative().parse(request.windowId);
         if ((await this.api.storage.local.get(OUTBOUND))[OUTBOUND]) { await this.retryOutbound(); throw new Error('The previous send has been checked. Review its status before sending another workspace.'); }
         if (request.currentTabOnly !== undefined) z.boolean().parse(request.currentTabOnly);
-        const { workspace, warnings } = await captureWorkspace(this.api, request.windowId, request.currentTabOnly ?? false);
-        const outbound: Outbound = { requestId: crypto.randomUUID(), destinationId, workspace, createdAt: Date.now() };
+        let captured: Awaited<ReturnType<typeof captureWorkspace>>;
+        try { captured = await captureWorkspace(this.api, request.windowId, request.currentTabOnly ?? false); }
+        catch (error) {
+          const unsupported = error instanceof Error && /current tab cannot be sent|no supported HTTP\(S\) tabs/.test(error.message);
+          this.analytics.record('capture_failed', unsupported ? 'tab_unsupported' : 'capture_error'); throw error;
+        }
+        const { workspace, warnings } = captured;
+        const config = await this.configuration();
+        const analytics = config && this.analytics.metadata(config, request.currentTabOnly === true);
+        const outbound: Outbound = { requestId: crypto.randomUUID(), destinationId, workspace, createdAt: Date.now(), ...(analytics ? { analytics } : {}) };
         await this.api.storage.local.set({ [OUTBOUND]: outbound }); await this.updateStatus({ preferredDestinationId: destinationId, captureWarnings: warnings, lastError: undefined });
         const command = await this.retryOutbound(); if (!command) throw new Error('The handoff could not be submitted');
         return { ok: true, command, state: await this.state(false) };
@@ -292,7 +307,7 @@ export class BackgroundController {
           try { await new BackendClient(existing.backendUrl, existing.credentials).request('/api/device', 'DELETE'); }
           catch (error) { if (!(error instanceof ApiError) || error.status !== 401) throw error; }
         }
-        this.transport.stop(); await this.api.storage.local.remove([CONFIG, STATUS, OUTBOUND, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED, DISCOVERY_PREFERENCES_VERSION]); return { ok: true, state: await this.state(false) };
+        this.transport.stop(); await this.api.storage.local.remove([CONFIG, STATUS, OUTBOUND, DISCOVERY_ENABLED, DISCOVERY_PUBLISHED, DISCOVERY_PREFERENCES_VERSION]); await this.analytics.reset(); return { ok: true, state: await this.state(false) };
       }
       default: throw new Error('Unknown extension request');
     }

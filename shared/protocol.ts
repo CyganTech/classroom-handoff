@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { analyticsMetadataSchema } from './analytics.js';
 
 export const MAX_TABS = 100;
 export const MAX_MESSAGE_BYTES = 512 * 1024;
@@ -38,7 +39,7 @@ export interface IncomingCommand extends PublicCommand { sourceName: string; wor
 export type ServerMessage = { type: 'ready'; deviceId: string } | { type: 'pong' } | { type: 'devices_changed' } | { type: 'handoff'; command: IncomingCommand } | { type: 'command_updated'; command: PublicCommand } | { type: 'error'; error: string };
 export type ClientMessage = { type: 'authenticate'; deviceId: string; token: string } | { type: 'ping' } | { type: 'ack'; commandId: string; status: 'applied' | 'failed'; error?: string; warnings?: string[] };
 export const ackSchema = z.object({ type: z.literal('ack'), commandId: z.string().uuid(), status: z.enum(['applied', 'failed']), error: z.string().max(500).optional(), warnings: z.array(z.string().max(300)).max(30).optional() }).strict();
-export const handoffSchema = z.object({ destinationId: z.string().uuid(), requestId: z.string().uuid(), workspace: workspaceSchema }).strict();
+export const handoffSchema = z.object({ destinationId: z.string().uuid(), requestId: z.string().uuid(), workspace: workspaceSchema, analytics: analyticsMetadataSchema.optional() }).strict();
 export function normalizeBackendUrl(value: string): string {
   const u = new URL(value.trim());
   if (u.username || u.password || u.search || u.hash || (u.pathname !== '/' && u.pathname !== '')) throw new Error('Use a backend origin only, such as https://handoff.example.org');

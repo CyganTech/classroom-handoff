@@ -13,6 +13,7 @@ jobs:
       - run: npm run check
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - run: npm run test:analytics
       - run: docker compose config --quiet
       - run: HANDOFF_DOMAIN=handoff.example.org ACME_EMAIL=admin@example.org docker compose -f compose.production.yaml config --quiet
       - run: PROXY_NETWORK=proxy docker compose -f compose.yaml -f compose.proxy.yaml config --quiet

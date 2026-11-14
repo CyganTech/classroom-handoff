@@ -6,12 +6,13 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { createApp } from '../server/app.js';
+import { analyticsDate } from '../server/analytics-store.js';
 import type { UiRequest, UiResponse, UiState } from '../shared/ui.js';
 
 const root = await mkdtemp(join(tmpdir(), 'classroom-handoff-e2e-'));
 const evidence = resolve('test-results');
 await mkdir(evidence, { recursive: true });
-let app = createApp({ dataDir: join(root, 'data') });
+let app = createApp({ dataDir: join(root, 'data'), analyticsAdminKey: 'disposable-e2e-analytics-key-12345678', analyticsEnabled: true });
 const address = await app.listen(0);
 const web = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(`<html><head><title>Lesson ${req.url}</title></head><body><h1>Classroom test ${req.url}</h1></body></html>`); });
 await new Promise<void>((done, reject) => { web.once('error', reject); web.listen(0, '127.0.0.1', done); });
@@ -277,7 +278,7 @@ try {
   await until(() => state(a.options), value => value.devices.some(d => d.id === destinationId && d.online), 'receiver reconnect');
   await b.options.close();
   await app.close();
-  app = createApp({ dataDir: join(root, 'data') }); await app.listen(address.port);
+  app = createApp({ dataDir: join(root, 'data'), analyticsAdminKey: 'disposable-e2e-analytics-key-12345678', analyticsEnabled: true }); await app.listen(address.port);
   await until(() => state(a.options), value => value.connected && value.deviceId === senderId && value.devices.some(d => d.id === destinationId && d.online), 'backend restart reconnect', 45000);
   const result = await request(a.options, { action: 'handoff', destinationId, windowId: source.windowId });
   assert.equal(result.ok, true);
@@ -285,6 +286,11 @@ try {
   assert.ok(sentId);
   await until(() => state(a.options), value => value.lastCommand?.id === sentId && value.lastCommand.status === 'applied', 'post-restart handoff applied');
   console.log('PASS F: browser profile and backend restart retain identity/pairing and resume actual handoffs');
+  const report = app.store.analytics.report(analyticsDate(Date.now() - 86400000), analyticsDate(Date.now()));
+  assert.ok(report.summary.handoffs > 0); assert.ok(report.modes.currentTab > 0); assert.ok(report.modes.wholeWindow > 0);
+  assert.ok(report.pairings.code > 0); assert.ok(report.pairings.easyPair > 0);
+  assert.equal(JSON.stringify(report).includes(lessonOrigin), false, 'analytics excludes workspace URLs');
+  console.log('PASS: real extension reports modes/version and backend counts pairings/outcomes without workspace URLs');
   assert.deepEqual(pageErrors, [], 'No extension page runtime errors');
   console.log(`PASS: real two-profile extension end-to-end. Browser ${b.context.browser()?.version() ?? 'Chromium'}. Evidence: ${evidence}`);
 } catch (error) {

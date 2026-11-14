@@ -107,3 +107,8 @@ For localhost development, `docker compose up -d --build --wait` works without c
 For automatic HTTPS without an existing proxy, use the separate `compose.production.yaml` and [Caddy instructions in the README](../README.md#automatic-https-with-caddy). That file is standalone; do not merge it with `compose.yaml`.
 
 The helper uses standard Compose files, so direct Compose commands and Git-based stack managers can use the same files and environment settings. Neither a registry account nor access to an extension signing key is needed on the Docker server.
+
+
+## Pilot analytics
+
+To enable the private analytics dashboard, update this backend and add the administrator key/retention environment settings before rebuilding. Follow [the analytics server update guide](analytics.md). Keep the same checkout, Compose project, volume and reverse proxy; no additional container, port or external analytics service is required.
