@@ -1,5 +1,7 @@
 # Classroom Handoff
 
+**New to Handoff?** Start with the friendly [user guide](docs/user-guide.md) or download the [printable PDF](output/pdf/classroom-handoff-user-guide.pdf).
+
 **Testing through Google Admin?** Use the [managed deployment guide](docs/managed-deployment.md) and [hosted installation/update page](https://cygantech.github.io/classroom-handoff/). The signed managed release is force-installed by ID/custom update URL; it does not need Developer mode. GitHub Pages hosts installation files; the backend still runs on your HTTPS Docker host.
 
 Send the current Chrome window to a paired classroom browser. The receiving extension opens the workspace automatically in a dedicated window, including tab order, active selection, pinned tabs and supported groups. Both installations use the same extension; either can send or receive.
